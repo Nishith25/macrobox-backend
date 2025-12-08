@@ -1,16 +1,14 @@
 // server.js (CommonJS)
 
+require("dotenv").config(); // ⬅ Load .env FIRST
+
 const express = require("express");
 const mongoose = require("mongoose");
-const dotenv = require("dotenv");
 const cors = require("cors");
-
-// Load env variables
-dotenv.config();
 
 const app = express();
 
-// Middleware
+// -------------------- MIDDLEWARE --------------------
 app.use(cors());
 app.use(express.json());
 
@@ -19,14 +17,15 @@ const authRoutes = require("./routes/auth");
 const userRoutes = require("./routes/user");
 const mealsRoutes = require("./routes/meals");
 const adminMealsRoutes = require("./routes/adminMeals");
-const adminUsersRoutes = require("./routes/adminUsers"); // ✅ NEW
+const adminUsersRoutes = require("./routes/adminUsers"); // ✅ Admin user management
 
 // -------------------- REGISTER ROUTES --------------------
 app.use("/api/auth", authRoutes);
 app.use("/api/user", userRoutes);
 app.use("/api/meals", mealsRoutes);
+
 app.use("/api/admin/meals", adminMealsRoutes);
-app.use("/api/admin/users", adminUsersRoutes); // ✅ NEW admin user management
+app.use("/api/admin/users", adminUsersRoutes); // ✅ Admin user management route
 
 // Test Route
 app.get("/", (req, res) => {
@@ -37,7 +36,10 @@ app.get("/", (req, res) => {
 mongoose
   .connect(process.env.MONGO_URI)
   .then(() => console.log("✅ MongoDB Connected"))
-  .catch((err) => console.error("❌ MongoDB Error:", err));
+  .catch((err) => {
+    console.error("❌ MongoDB Error:", err);
+    process.exit(1);
+  });
 
 // -------------------- START SERVER --------------------
 const PORT = process.env.PORT || 5000;

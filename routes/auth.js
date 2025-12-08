@@ -20,20 +20,18 @@ const createRefreshToken = (userId) =>
 router.post("/signup", async (req, res) => {
   try {
     console.log("SIGNUP BODY:", req.body);
-
     const { name, email, password } = req.body;
-
-    if (!name || !email || !password)
-      return res.status(400).json({ message: "All fields required" });
 
     const existing = await User.findOne({ email });
     if (existing)
-      return res.status(400).json({ message: "Email already in use" });
+      return res
+        .status(400)
+        .json({ message: "Email already in use. Please login instead." });
 
     const hashed = await bcrypt.hash(password, 10);
     const verificationToken = crypto.randomBytes(32).toString("hex");
 
-    await User.create({
+    const user = await User.create({
       name,
       email,
       password: hashed,
@@ -41,34 +39,34 @@ router.post("/signup", async (req, res) => {
       verificationToken,
     });
 
+    // Build email link
     const link = `${process.env.FRONTEND_URL}/verify-email/${verificationToken}`;
 
-    const html = `
-      <h2>Welcome to MacroBox, ${name}! 🎉</h2>
-      <p>Click the button below to verify your email:</p>
-      <a href="${link}" style="
-        background:#10b981;
-        color:white;
-        padding:12px 18px;
-        border-radius:6px;
-        text-decoration:none;
-        font-size:16px;">
-        Verify Email
-      </a>
-      <br/><br/>
-      <p>If you didn’t create this account, you can safely ignore this email.</p>
-    `;
-
-    await sendEmail(email, "Verify Your MacroBox Account", html);
+    // Send email
+    await sendEmail(
+      email,
+      "Verify your MacroBox account",
+      `
+        <h2>Welcome to MacroBox, ${name}! 🎉</h2>
+        <p>Click the link below to verify your email:</p>
+        <a href="${link}" 
+           style="background:#22c55e;padding:12px 20px;color:white;
+                  border-radius:6px;text-decoration:none;font-weight:bold;">
+          Verify Email
+        </a>
+      `
+    );
 
     res.json({
-      message: `Signup successful! Verification email sent to ${email}.`,
+      message:
+        "Signup successful! Please check your email to verify your account.",
     });
   } catch (err) {
     console.error("Signup error:", err);
     res.status(500).json({ message: "Server error" });
   }
 });
+
 
 // ---------------- VERIFY EMAIL ----------------
 router.get("/verify-email/:token", async (req, res) => {
@@ -96,27 +94,37 @@ router.post("/login", async (req, res) => {
     const { email, password } = req.body;
 
     const user = await User.findOne({ email });
+
+    // ❌ User not found
     if (!user)
-      return res.status(400).json({ message: "Invalid credentials" });
+      return res
+        .status(404)
+        .json({ message: "User not registered. Please sign up first." });
 
-    const match = await bcrypt.compare(password, user.password);
-    if (!match)
-      return res.status(400).json({ message: "Invalid credentials" });
-
+    // ❌ Email exists but not verified
     if (!user.emailVerified)
-      return res.status(403).json({ message: "Please verify your email first" });
+      return res
+        .status(403)
+        .json({ message: "Please verify your email before logging in." });
 
-    const token = createAccessToken(user._id);
+    const isMatch = await bcrypt.compare(password, user.password);
+
+    // ❌ Wrong password
+    if (!isMatch)
+      return res.status(400).json({ message: "Incorrect password." });
+
+    const accessToken = createAccessToken(user._id);
     const refreshToken = createRefreshToken(user._id);
 
+    const safeUser = {
+      _id: user._id,
+      name: user.name,
+      email: user.email,
+    };
+
     res.json({
-      user: {
-        _id: user._id,
-        name: user.name,
-        email: user.email,
-        role: user.role,
-      },
-      token,
+      user: safeUser,
+      token: accessToken,
       refreshToken,
     });
   } catch (err) {
@@ -124,6 +132,7 @@ router.post("/login", async (req, res) => {
     res.status(500).json({ message: "Server error" });
   }
 });
+
 
 // ---------------- FORGOT PASSWORD ----------------
 router.post("/forgot-password", async (req, res) => {
@@ -178,6 +187,50 @@ router.post("/reset-password/:token", async (req, res) => {
     res.json({ message: "Password reset successfully!" });
   } catch (err) {
     console.error("Reset error:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// ---------------- RESEND VERIFICATION ----------------
+
+router.post("/resend-verification", async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    const user = await User.findOne({ email });
+
+    if (!user)
+      return res.status(400).json({ message: "User not found" });
+
+    if (user.emailVerified)
+      return res.status(400).json({ message: "Email already verified" });
+
+    // generate new token
+    const newToken = crypto.randomBytes(32).toString("hex");
+    user.verificationToken = newToken;
+    await user.save();
+
+    const link = `${process.env.FRONTEND_URL}/verify-email/${newToken}`;
+
+    await sendEmail(
+      email,
+      "Verify your MacroBox account (Resent)",
+      `
+        <h2>Verify Your Email</h2>
+        <p>Click the button below to verify your email.</p>
+        <a href="${link}"
+           style="background:#22c55e;padding:10px 18px;color:white;
+           border-radius:6px;text-decoration:none;font-weight:bold;">
+           Verify Email
+        </a>
+        <p>If you didn't request this, you can ignore the email.</p>
+      `
+    );
+
+    res.json({ message: "Verification email resent!" });
+
+  } catch (err) {
+    console.error("Resend error:", err);
     res.status(500).json({ message: "Server error" });
   }
 });
