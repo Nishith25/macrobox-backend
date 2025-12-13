@@ -32,6 +32,16 @@ app.get("/", (req, res) => {
   res.send("MacroBox Backend Running 🚀");
 });
 
+
+// Health Check Route
+app.get("/health", (req, res) => {
+  res.json({
+    status: "ok",
+    message: "Backend is running successfully 🚀"
+  });
+});
+
+
 // -------------------- DATABASE CONNECTION --------------------
 mongoose
   .connect(process.env.MONGO_URI)
