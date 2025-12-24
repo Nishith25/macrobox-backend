@@ -15,6 +15,7 @@ const corsOptions = {
     "http://localhost:5173",
     "https://macrobox.co.in",
     "https://www.macrobox.co.in",
+    "https://macrobox-frontend.vercel.app",
   ],
   credentials: true,
 };
