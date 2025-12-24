@@ -1,11 +1,11 @@
 const express = require("express");
-const { verifyAdmin } = require("../middleware/authMiddleware");
+const { verifyAuth, verifyAdmin } = require("../middleware/auth"); // ✅ FIX
 const Meal = require("../models/Meal");
 
 const router = express.Router();
 
 // CREATE MEAL
-router.post("/", verifyAdmin, async (req, res) => {
+router.post("/", verifyAuth, verifyAdmin, async (req, res) => {
   try {
     const meal = new Meal(req.body);
     await meal.save();
@@ -15,14 +15,16 @@ router.post("/", verifyAdmin, async (req, res) => {
   }
 });
 
-// UPDATE MEAL  ✅ FIXED
-router.put("/:id", verifyAdmin, async (req, res) => {
+// UPDATE MEAL
+router.put("/:id", verifyAuth, verifyAdmin, async (req, res) => {
   try {
     const meal = await Meal.findByIdAndUpdate(req.params.id, req.body, {
       new: true,
     });
 
-    if (!meal) return res.status(404).json({ message: "Meal not found" });
+    if (!meal) {
+      return res.status(404).json({ message: "Meal not found" });
+    }
 
     res.json(meal);
   } catch (err) {
@@ -31,7 +33,7 @@ router.put("/:id", verifyAdmin, async (req, res) => {
 });
 
 // GET ALL MEALS
-router.get("/", verifyAdmin, async (req, res) => {
+router.get("/", verifyAuth, verifyAdmin, async (req, res) => {
   try {
     const meals = await Meal.find().sort({ createdAt: -1 });
     res.json(meals);
@@ -41,7 +43,7 @@ router.get("/", verifyAdmin, async (req, res) => {
 });
 
 // DELETE MEAL
-router.delete("/:id", verifyAdmin, async (req, res) => {
+router.delete("/:id", verifyAuth, verifyAdmin, async (req, res) => {
   try {
     await Meal.findByIdAndDelete(req.params.id);
     res.json({ message: "Meal deleted" });

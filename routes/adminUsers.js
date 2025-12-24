@@ -1,10 +1,10 @@
 const express = require("express");
-const { verifyAuth, verifyAdmin } = require("../middleware/authMiddleware");
+const { verifyAuth, verifyAdmin } = require("../middleware/auth"); // ✅ FIX
 const User = require("../models/User");
 
 const router = express.Router();
 
-// Get all users (admin only)
+// GET all users (admin only)
 router.get("/", verifyAuth, verifyAdmin, async (req, res) => {
   try {
     const users = await User.find().select("-password");
@@ -15,10 +15,11 @@ router.get("/", verifyAuth, verifyAdmin, async (req, res) => {
   }
 });
 
-// Update role
+// UPDATE user role (admin only)
 router.patch("/:id/role", verifyAuth, verifyAdmin, async (req, res) => {
   try {
     const { role } = req.body;
+
     if (!["user", "admin"].includes(role)) {
       return res.status(400).json({ message: "Invalid role" });
     }
@@ -28,6 +29,10 @@ router.patch("/:id/role", verifyAuth, verifyAdmin, async (req, res) => {
       { role },
       { new: true }
     ).select("-password");
+
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
 
     res.json(user);
   } catch (err) {

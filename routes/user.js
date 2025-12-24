@@ -1,13 +1,13 @@
 const express = require("express");
-const auth = require("../middleware/auth");
+const { verifyAuth } = require("../middleware/auth"); // ✅ FIX
 const User = require("../models/User");
 const Meal = require("../models/Meal");
 
 const router = express.Router();
 
 // GET /api/user/me
-router.get("/me", auth, async (req, res) => {
-  const user = await User.findById(req.user.id)
+router.get("/me", verifyAuth, async (req, res) => {
+  const user = await User.findById(req.user._id)
     .populate("favorites")
     .populate("dayPlan.meal");
 
@@ -20,11 +20,11 @@ router.get("/me", auth, async (req, res) => {
   });
 });
 
-// POST /api/user/day-plan  { items: [{ mealId, timeOfDay }] }
-router.post("/day-plan", auth, async (req, res) => {
-  const { items } = req.body; // array
+// POST /api/user/day-plan
+router.post("/day-plan", verifyAuth, async (req, res) => {
+  const { items } = req.body;
 
-  const user = await User.findById(req.user.id);
+  const user = await User.findById(req.user._id);
   user.dayPlan = items.map((it) => ({
     meal: it.mealId,
     timeOfDay: it.timeOfDay || "lunch",
@@ -34,18 +34,18 @@ router.post("/day-plan", auth, async (req, res) => {
   res.json({ message: "Day plan saved", dayPlan: user.dayPlan });
 });
 
-// POST /api/user/favorites/:mealId  (toggle)
-router.post("/favorites/:mealId", auth, async (req, res) => {
+// POST /api/user/favorites/:mealId (toggle)
+router.post("/favorites/:mealId", verifyAuth, async (req, res) => {
   const { mealId } = req.params;
-  const user = await User.findById(req.user.id);
+  const user = await User.findById(req.user._id);
 
   const exists = user.favorites.find(
-    (id) => id.toString() === mealId.toString()
+    (id) => id.toString() === mealId
   );
 
   if (exists) {
     user.favorites = user.favorites.filter(
-      (id) => id.toString() !== mealId.toString()
+      (id) => id.toString() !== mealId
     );
   } else {
     const meal = await Meal.findById(mealId);
