@@ -5,42 +5,50 @@ require("dotenv").config(); // ⬅ Load .env FIRST
 const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
+const cookieParser = require("cookie-parser"); // ✅ ADD
 
 const app = express();
 
 // -------------------- MIDDLEWARE --------------------
-app.use(cors());
-app.use(express.json());
+app.use(
+  cors({
+    origin: [
+      "http://localhost:5173",
+      "https://macrobox.co.in",
+      "https://www.macrobox.co.in",
+    ],
+    credentials: true,
+  })
+);
+
+app.use(express.json());       // ✅ ADD
+app.use(cookieParser());       // ✅ ADD
 
 // -------------------- ROUTES --------------------
 const authRoutes = require("./routes/auth");
 const userRoutes = require("./routes/user");
 const mealsRoutes = require("./routes/meals");
 const adminMealsRoutes = require("./routes/adminMeals");
-const adminUsersRoutes = require("./routes/adminUsers"); // ✅ Admin user management
+const adminUsersRoutes = require("./routes/adminUsers");
 
 // -------------------- REGISTER ROUTES --------------------
 app.use("/api/auth", authRoutes);
 app.use("/api/user", userRoutes);
 app.use("/api/meals", mealsRoutes);
-
 app.use("/api/admin/meals", adminMealsRoutes);
-app.use("/api/admin/users", adminUsersRoutes); // ✅ Admin user management route
+app.use("/api/admin/users", adminUsersRoutes);
 
-// Test Route
+// -------------------- TEST ROUTES --------------------
 app.get("/", (req, res) => {
   res.send("MacroBox Backend Running 🚀");
 });
 
-
-// Health Check Route
 app.get("/health", (req, res) => {
   res.json({
     status: "ok",
-    message: "Backend is running successfully 🚀"
+    message: "Backend is running successfully 🚀",
   });
 });
-
 
 // -------------------- DATABASE CONNECTION --------------------
 mongoose
@@ -53,4 +61,6 @@ mongoose
 
 // -------------------- START SERVER --------------------
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+app.listen(PORT, () =>
+  console.log(`🚀 Server running on port ${PORT}`)
+);
