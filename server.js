@@ -5,24 +5,29 @@ require("dotenv").config(); // ⬅ Load .env FIRST
 const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
-const cookieParser = require("cookie-parser"); // ✅ ADD
+const cookieParser = require("cookie-parser");
 
 const app = express();
 
-// -------------------- MIDDLEWARE --------------------
-app.use(
-  cors({
-    origin: [
-      "http://localhost:5173",
-      "https://macrobox.co.in",
-      "https://www.macrobox.co.in",
-    ],
-    credentials: true,
-  })
-);
+// -------------------- CORS CONFIG --------------------
+const corsOptions = {
+  origin: [
+    "http://localhost:5173",
+    "https://macrobox.co.in",
+    "https://www.macrobox.co.in",
+  ],
+  credentials: true,
+};
 
-app.use(express.json());       // ✅ ADD
-app.use(cookieParser());       // ✅ ADD
+// 🔥 Apply CORS to ALL requests
+app.use(cors(corsOptions));
+
+// 🔥 Explicitly handle preflight (OPTIONS)
+app.options("*", cors(corsOptions));
+
+// -------------------- MIDDLEWARE --------------------
+app.use(express.json());
+app.use(cookieParser());
 
 // -------------------- ROUTES --------------------
 const authRoutes = require("./routes/auth");
