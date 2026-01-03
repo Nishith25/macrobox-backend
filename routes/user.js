@@ -1,60 +1,103 @@
 const express = require("express");
-const { verifyAuth } = require("../middleware/auth"); // ✅ FIX
+const { verifyAuth } = require("../middleware/auth");
 const User = require("../models/User");
-const Meal = require("../models/Meal");
 
 const router = express.Router();
 
-// GET /api/user/me
+/* ======================================
+   GET CURRENT USER
+   GET /api/user/me
+====================================== */
 router.get("/me", verifyAuth, async (req, res) => {
   const user = await User.findById(req.user._id)
     .populate("favorites")
-    .populate("dayPlan.meal");
+    .populate("dayPlans.items.meal");
 
-  res.json({
-    id: user._id,
-    name: user.name,
-    email: user.email,
-    favorites: user.favorites,
-    dayPlan: user.dayPlan,
-  });
+  if (!user) {
+    return res.status(404).json({ message: "User not found" });
+  }
+
+  res.json(user);
 });
 
-// POST /api/user/day-plan
+/* ======================================
+   GET LAST 15 DAY PLANS
+   GET /api/user/day-plan
+====================================== */
+router.get("/day-plan", verifyAuth, async (req, res) => {
+  const user = await User.findById(req.user._id)
+    .populate("dayPlans.items.meal");
+
+  if (!user) {
+    return res.status(404).json({ message: "User not found" });
+  }
+
+  const plans = [...user.dayPlans]
+    .sort((a, b) => new Date(b.date) - new Date(a.date))
+    .slice(0, 15);
+
+  res.json(plans);
+});
+
+/* ======================================
+   SAVE TODAY PLAN
+   POST /api/user/day-plan
+====================================== */
 router.post("/day-plan", verifyAuth, async (req, res) => {
   const { items } = req.body;
 
+  if (!Array.isArray(items) || items.length === 0) {
+    return res.status(400).json({ message: "No plan items provided" });
+  }
+
   const user = await User.findById(req.user._id);
-  user.dayPlan = items.map((it) => ({
-    meal: it.mealId,
-    timeOfDay: it.timeOfDay || "lunch",
-  }));
+  if (!user) {
+    return res.status(404).json({ message: "User not found" });
+  }
 
-  await user.save();
-  res.json({ message: "Day plan saved", dayPlan: user.dayPlan });
-});
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
 
-// POST /api/user/favorites/:mealId (toggle)
-router.post("/favorites/:mealId", verifyAuth, async (req, res) => {
-  const { mealId } = req.params;
-  const user = await User.findById(req.user._id);
-
-  const exists = user.favorites.find(
-    (id) => id.toString() === mealId
+  // Remove existing plan for today
+  user.dayPlans = user.dayPlans.filter(
+    (p) => new Date(p.date).getTime() !== today.getTime()
   );
 
-  if (exists) {
-    user.favorites = user.favorites.filter(
-      (id) => id.toString() !== mealId
-    );
-  } else {
-    const meal = await Meal.findById(mealId);
-    if (!meal) return res.status(404).json({ message: "Meal not found" });
-    user.favorites.push(mealId);
+  user.dayPlans.push({
+    date: today,
+    items: items.map((i) => ({
+      meal: i.mealId,
+      times: i.times,
+    })),
+  });
+
+  // Keep only last 15 days
+  if (user.dayPlans.length > 15) {
+    user.dayPlans = user.dayPlans.slice(-15);
   }
 
   await user.save();
-  res.json({ message: "Favorites updated", favorites: user.favorites });
+
+  res.json({ message: "Day plan saved successfully" });
+});
+
+/* ======================================
+   DELETE PLAN
+   DELETE /api/user/day-plan/:id
+====================================== */
+router.delete("/day-plan/:id", verifyAuth, async (req, res) => {
+  const user = await User.findById(req.user._id);
+  if (!user) {
+    return res.status(404).json({ message: "User not found" });
+  }
+
+  user.dayPlans = user.dayPlans.filter(
+    (p) => p._id.toString() !== req.params.id
+  );
+
+  await user.save();
+
+  res.json({ message: "Plan deleted" });
 });
 
 module.exports = router;

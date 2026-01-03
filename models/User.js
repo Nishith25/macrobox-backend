@@ -12,11 +12,41 @@ const userSchema = new mongoose.Schema(
 
     emailVerified: { type: Boolean, default: false },
 
-    verificationToken: { type: String },
+    verificationToken: String,
+    resetPasswordToken: String,
+    resetPasswordExpires: Date,
 
-    resetPasswordToken: { type: String },
+    /* ================= FAVORITES ================= */
+    favorites: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "Meal",
+      },
+    ],
 
-    resetPasswordExpires: { type: Date },
+    /* ================= DAY PLANS ================= */
+    dayPlans: [
+      {
+        date: {
+          type: Date,
+          required: true,
+        },
+        items: [
+          {
+            meal: {
+              type: mongoose.Schema.Types.ObjectId,
+              ref: "Meal",
+              required: true,
+            },
+            times: {
+              type: [String],
+              enum: ["breakfast", "lunch", "snack", "dinner"],
+              required: true,
+            },
+          },
+        ],
+      },
+    ],
   },
   { timestamps: true }
 );
