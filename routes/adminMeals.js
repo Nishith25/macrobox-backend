@@ -90,6 +90,63 @@ router.put("/:id", upload.single("image"), async (req, res) => {
 });
 
 /**
+ * REORDER FEATURED MEALS
+ * PATCH /api/admin/meals/reorder
+ */
+router.patch("/reorder", async (req, res) => {
+  try {
+    const { orderedIds } = req.body;
+
+    if (!Array.isArray(orderedIds)) {
+      return res.status(400).json({ message: "Invalid order data" });
+    }
+
+    await Promise.all(
+      orderedIds.map((id, index) =>
+        Meal.findByIdAndUpdate(id, { featuredOrder: index })
+      )
+    );
+
+    res.json({ message: "Featured meals reordered" });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Reorder failed" });
+  }
+});
+
+
+
+/**
+ * ======================================
+ * SAVE FEATURED ORDER (ADMIN)
+ * PATCH /api/admin/meals/featured-order
+ * ======================================
+ */
+router.patch("/featured-order", async (req, res) => {
+  try {
+    const { orderedIds } = req.body;
+
+    if (!Array.isArray(orderedIds)) {
+      return res.status(400).json({ message: "Invalid payload" });
+    }
+
+    const updates = orderedIds.map((id, index) => ({
+      updateOne: {
+        filter: { _id: id },
+        update: { featuredOrder: index },
+      },
+    }));
+
+    await Meal.bulkWrite(updates);
+
+    res.json({ message: "Featured order updated" });
+  } catch (err) {
+    console.error("Save order error:", err);
+    res.status(500).json({ message: "Failed to save order" });
+  }
+});
+
+/**
  * ======================================
  * TOGGLE FEATURED (ADMIN)
  * PATCH /api/admin/meals/:id/featured

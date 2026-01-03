@@ -13,15 +13,15 @@ const router = express.Router();
 router.get("/featured", async (req, res) => {
   try {
     const meals = await Meal.find({ isFeatured: true })
-      .sort({ createdAt: -1 })
-      .limit(3);
-
-    res.status(200).json(meals);
+      .sort({ featuredOrder: 1 }) 
+      
+    res.json(meals);
   } catch (err) {
-    console.error("Featured meals error:", err);
     res.status(500).json({ message: "Failed to fetch featured meals" });
   }
 });
+
+
 
 /**
  * ======================================
