@@ -1,6 +1,6 @@
 // server.js (CommonJS)
 
-require("dotenv").config(); // ⬅ Load .env FIRST
+require("dotenv").config();
 
 const express = require("express");
 const mongoose = require("mongoose");
@@ -20,14 +20,17 @@ const corsOptions = {
   credentials: true,
 };
 
-// 🔥 Apply CORS to ALL requests
+// -------------------- MIDDLEWARE (ORDER MATTERS) --------------------
 app.use(cors(corsOptions));
-
-// 🔥 Explicitly handle preflight (OPTIONS)
 app.options("*", cors(corsOptions));
 
-// -------------------- MIDDLEWARE --------------------
+// ✅ REQUIRED for JSON bodies
 app.use(express.json());
+
+// ✅ REQUIRED for multipart/form-data (multer)
+app.use(express.urlencoded({ extended: true }));
+
+// ✅ Cookies for auth / refresh
 app.use(cookieParser());
 
 // -------------------- ROUTES --------------------
@@ -56,6 +59,12 @@ app.get("/health", (req, res) => {
   });
 });
 
+// -------------------- ERROR HANDLER --------------------
+app.use((err, req, res, next) => {
+  console.error("Unhandled Error:", err);
+  res.status(500).json({ message: "Internal Server Error" });
+});
+
 // -------------------- DATABASE CONNECTION --------------------
 mongoose
   .connect(process.env.MONGO_URI)
@@ -67,6 +76,6 @@ mongoose
 
 // -------------------- START SERVER --------------------
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () =>
-  console.log(`🚀 Server running on port ${PORT}`)
-);
+app.listen(PORT, () => {
+  console.log(`🚀 Server running on port ${PORT}`);
+});

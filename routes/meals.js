@@ -4,8 +4,29 @@ const Meal = require("../models/Meal");
 const router = express.Router();
 
 /**
+ * ======================================
+ * GET FEATURED MEALS (PUBLIC)
+ * GET /api/meals/featured
+ * ======================================
+ */
+router.get("/featured", async (req, res) => {
+  try {
+    const meals = await Meal.find({ isFeatured: true })
+      .sort({ createdAt: -1 })
+      .limit(3); // ✅ Home page requirement
+
+    res.status(200).json(meals);
+  } catch (err) {
+    console.error("Featured meals error:", err);
+    res.status(500).json({ message: "Failed to fetch featured meals" });
+  }
+});
+
+/**
+ * ======================================
+ * GET ALL MEALS (PUBLIC)
  * GET /api/meals
- * Public – Get all meals
+ * ======================================
  */
 router.get("/", async (req, res) => {
   try {
@@ -13,30 +34,15 @@ router.get("/", async (req, res) => {
     res.status(200).json(meals);
   } catch (err) {
     console.error("Get meals error:", err);
-    res.status(500).json({ message: "Server error" });
+    res.status(500).json({ message: "Failed to fetch meals" });
   }
 });
 
 /**
- * GET /api/meals/featured
- * Public – Home page (exactly 3 featured day packs)
- */
-router.get("/featured", async (req, res) => {
-  try {
-    const featuredMeals = await Meal.find({ isFeatured: true })
-      .sort({ updatedAt: -1 })
-      .limit(3);
-
-    res.status(200).json(featuredMeals);
-  } catch (err) {
-    console.error("Get featured meals error:", err);
-    res.status(500).json({ message: "Server error" });
-  }
-});
-
-/**
+ * ======================================
+ * GET MEAL BY ID (PUBLIC)
  * GET /api/meals/:id
- * Public – Get meal by ID
+ * ======================================
  */
 router.get("/:id", async (req, res) => {
   try {
