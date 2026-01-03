@@ -7,13 +7,14 @@ const router = express.Router();
  * ======================================
  * GET FEATURED MEALS (PUBLIC)
  * GET /api/meals/featured
+ * Used by Home.tsx
  * ======================================
  */
 router.get("/featured", async (req, res) => {
   try {
     const meals = await Meal.find({ isFeatured: true })
       .sort({ createdAt: -1 })
-      .limit(3); // ✅ Home page requirement
+      .limit(3);
 
     res.status(200).json(meals);
   } catch (err) {
@@ -26,6 +27,7 @@ router.get("/featured", async (req, res) => {
  * ======================================
  * GET ALL MEALS (PUBLIC)
  * GET /api/meals
+ * Used by Meals page
  * ======================================
  */
 router.get("/", async (req, res) => {
@@ -42,6 +44,7 @@ router.get("/", async (req, res) => {
  * ======================================
  * GET MEAL BY ID (PUBLIC)
  * GET /api/meals/:id
+ * Used by MealDetails page
  * ======================================
  */
 router.get("/:id", async (req, res) => {

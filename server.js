@@ -10,7 +10,6 @@ const cookieParser = require("cookie-parser");
 const app = express();
 
 // -------------------- CORS CONFIG --------------------
-// -------------------- CORS CONFIG --------------------
 const corsOptions = {
   origin: [
     "http://localhost:5173",
@@ -24,19 +23,16 @@ const corsOptions = {
 };
 
 app.use(cors(corsOptions));
-app.options("*", cors(corsOptions));
+app.options("/*", cors(corsOptions));
 
-// -------------------- MIDDLEWARE (ORDER MATTERS) --------------------
-app.use(cors(corsOptions));
-app.options("*", cors(corsOptions));
+// -------------------- MIDDLEWARE --------------------
+// JSON body parsing
+app.use(express.json({ limit: "10mb" }));
 
-// ✅ REQUIRED for JSON bodies
-app.use(express.json());
-
-// ✅ REQUIRED for multipart/form-data (multer)
+// Form-data parsing (multer needs this)
 app.use(express.urlencoded({ extended: true }));
 
-// ✅ Cookies for auth / refresh
+// Cookies
 app.use(cookieParser());
 
 // -------------------- ROUTES --------------------
@@ -53,7 +49,7 @@ app.use("/api/meals", mealsRoutes);
 app.use("/api/admin/meals", adminMealsRoutes);
 app.use("/api/admin/users", adminUsersRoutes);
 
-// -------------------- TEST ROUTES --------------------
+// -------------------- HEALTH CHECK --------------------
 app.get("/", (req, res) => {
   res.send("MacroBox Backend Running 🚀");
 });
