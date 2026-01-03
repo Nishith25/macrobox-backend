@@ -71,6 +71,7 @@ router.post("/day-plan", verifyAuth, async (req, res) => {
     })),
   });
 
+
   // Keep only last 15 days
   if (user.dayPlans.length > 15) {
     user.dayPlans = user.dayPlans.slice(-15);
@@ -79,6 +80,44 @@ router.post("/day-plan", verifyAuth, async (req, res) => {
   await user.save();
 
   res.json({ message: "Day plan saved successfully" });
+});
+ /* ======================================
+   SAVE / UPDATE BODY METRICS
+   POST /api/user/body-metrics
+====================================== */
+router.post("/body-metrics", verifyAuth, async (req, res) => {
+  const {
+    height,
+    weight,
+    age,
+    gender,
+    activity,
+    goalWeight,
+    locked,
+  } = req.body;
+
+  const user = await User.findById(req.user._id);
+
+  if (!user) {
+    return res.status(404).json({ message: "User not found" });
+  }
+
+  user.bodyMetrics = {
+    height,
+    weight,
+    age,
+    gender,
+    activity,
+    goalWeight,
+    locked,
+  };
+
+  await user.save();
+
+  res.json({
+    message: "Body metrics saved",
+    bodyMetrics: user.bodyMetrics,
+  });
 });
 
 /* ======================================

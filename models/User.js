@@ -24,6 +24,27 @@ const userSchema = new mongoose.Schema(
       },
     ],
 
+    /* ================= BODY METRICS ================= */
+bodyMetrics: {
+  height: Number,
+  weight: Number,
+  age: Number,
+  gender: {
+    type: String,
+    enum: ["male", "female"],
+  },
+  activity: {
+    type: String,
+    enum: ["sedentary", "light", "moderate", "active", "very_active"],
+  },
+  goalWeight: Number,
+  locked: {
+    type: Boolean,
+    default: false,
+  },
+},
+
+
     /* ================= DAY PLANS ================= */
     dayPlans: [
       {
