@@ -10,6 +10,7 @@ const cookieParser = require("cookie-parser");
 const app = express();
 
 // -------------------- CORS CONFIG --------------------
+// -------------------- CORS CONFIG --------------------
 const corsOptions = {
   origin: [
     "http://localhost:5173",
@@ -18,7 +19,12 @@ const corsOptions = {
     "https://macrobox-frontend.vercel.app",
   ],
   credentials: true,
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
 };
+
+app.use(cors(corsOptions));
+app.options("*", cors(corsOptions));
 
 // -------------------- MIDDLEWARE (ORDER MATTERS) --------------------
 app.use(cors(corsOptions));
