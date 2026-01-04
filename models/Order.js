@@ -30,7 +30,7 @@ const orderSchema = new mongoose.Schema(
 
     delivery: {
       address: {
-        name: String,
+        fullName: String,
         phone: String,
         line1: String,
         line2: String,

@@ -66,27 +66,27 @@ function applyCoupon(subtotal, coupon) {
 ===================================================== */
 router.post("/create-order", verifyAuth, async (req, res) => {
   try {
-    const { items, address, deliverySlot, couponCode } = req.body;
+const { items, address, deliverySlot, couponCode } = req.body;
 
-    if (!Array.isArray(items) || items.length === 0) {
-      return res.status(400).json({ message: "Cart is empty" });
-    }
+if (!items || !items.length) {
+  return res.status(400).json({ message: "Cart is empty" });
+}
 
-    if (
-      !address ||
-      !address.fullName ||
-      !address.phone ||
-      !address.line1 ||
-      !address.city ||
-      !address.state ||
-      !address.pincode
-    ) {
-      return res.status(400).json({ message: "Address is incomplete" });
-    }
+if (
+  !address?.fullName ||
+  !address?.phone ||
+  !address?.line1 ||
+  !address?.city ||
+  !address?.state ||
+  !address?.pincode
+) {
+  return res.status(400).json({ message: "Address is incomplete" });
+}
 
-    if (!deliverySlot) {
-      return res.status(400).json({ message: "Select a delivery slot" });
-    }
+if (!deliverySlot?.date || !deliverySlot?.time) {
+  return res.status(400).json({ message: "Delivery slot missing" });
+}
+
 
     const subtotal = computeSubtotal(items);
 
@@ -108,19 +108,20 @@ router.post("/create-order", verifyAuth, async (req, res) => {
 
     /* ---- Save DB order ---- */
     const dbOrder = await Order.create({
-      userId: req.user._id,
-      items,
-      subtotal,
-      discount,
-      total,
-      couponCode: coupon ? coupon.code : null,
-      address,
-      deliverySlot,
-      payment: {
-        razorpayOrderId: rzpOrder.id,
-        status: "created",
-      },
-    });
+  userId: req.user.id,
+  items,
+  subtotal,
+  discount,
+  total,
+  couponCode: coupon ? coupon.code : null,
+  address,
+  deliverySlot,
+  payment: {
+    razorpayOrderId: rzpOrder.id,
+    status: "created",
+  },
+});
+
 
     res.json({
       keyId: process.env.RAZORPAY_KEY_ID,
