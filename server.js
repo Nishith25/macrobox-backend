@@ -1,5 +1,3 @@
-// server.js (CommonJS)
-
 require("dotenv").config();
 
 const express = require("express");
@@ -9,8 +7,8 @@ const cookieParser = require("cookie-parser");
 
 const app = express();
 
-// -------------------- CORS CONFIG --------------------
-const corsOptions = {
+/* ================= MIDDLEWARE FIRST ================= */
+app.use(cors({
   origin: [
     "http://localhost:5173",
     "https://macrobox.co.in",
@@ -18,56 +16,36 @@ const corsOptions = {
     "https://macrobox-frontend.vercel.app",
   ],
   credentials: true,
-  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization"],
-};
+}));
 
-app.use(cors(corsOptions));
-app.options("/*", cors(corsOptions));
-
-// -------------------- MIDDLEWARE --------------------
-// JSON body parsing
 app.use(express.json({ limit: "10mb" }));
-
-// Form-data parsing (multer needs this)
 app.use(express.urlencoded({ extended: true }));
-
-// Cookies
 app.use(cookieParser());
 
-// -------------------- ROUTES --------------------
-const authRoutes = require("./routes/auth");
-const userRoutes = require("./routes/user");
-const mealsRoutes = require("./routes/meals");
-const adminMealsRoutes = require("./routes/adminMeals");
-const adminUsersRoutes = require("./routes/adminUsers");
+/* ================= ROUTES ================= */
+app.use("/api/auth", require("./routes/auth"));
+app.use("/api/user", require("./routes/user"));
+app.use("/api/meals", require("./routes/meals"));
+app.use("/api/admin/meals", require("./routes/adminMeals"));
+app.use("/api/admin/users", require("./routes/adminUsers"));
 
-// -------------------- REGISTER ROUTES --------------------
-app.use("/api/auth", authRoutes);
-app.use("/api/user", userRoutes);
-app.use("/api/meals", mealsRoutes);
-app.use("/api/admin/meals", adminMealsRoutes);
-app.use("/api/admin/users", adminUsersRoutes);
+app.use("/api/admin/coupons", require("./routes/adminCoupons"));
+app.use("/api/coupons", require("./routes/coupons"));
+app.use("/api/checkout", require("./routes/checkout"));
+app.use("/api/orders", require("./routes/orders"));
 
-// -------------------- HEALTH CHECK --------------------
+/* ================= HEALTH ================= */
 app.get("/", (req, res) => {
   res.send("MacroBox Backend Running 🚀");
 });
 
-app.get("/health", (req, res) => {
-  res.json({
-    status: "ok",
-    message: "Backend is running successfully 🚀",
-  });
-});
-
-// -------------------- ERROR HANDLER --------------------
+/* ================= ERROR HANDLER ================= */
 app.use((err, req, res, next) => {
   console.error("Unhandled Error:", err);
   res.status(500).json({ message: "Internal Server Error" });
 });
 
-// -------------------- DATABASE CONNECTION --------------------
+/* ================= DB ================= */
 mongoose
   .connect(process.env.MONGO_URI)
   .then(() => console.log("✅ MongoDB Connected"))
@@ -76,7 +54,6 @@ mongoose
     process.exit(1);
   });
 
-// -------------------- START SERVER --------------------
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
