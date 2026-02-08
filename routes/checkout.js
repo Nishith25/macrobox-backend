@@ -1,3 +1,4 @@
+// backend/routes/checkout.js
 const express = require("express");
 const Razorpay = require("razorpay");
 const crypto = require("crypto");
@@ -8,7 +9,6 @@ const { verifyAuth } = require("../middleware/auth");
 const router = express.Router();
 
 /* ================= RAZORPAY ================= */
-
 const razorpay =
   process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET
     ? new Razorpay({
@@ -21,10 +21,7 @@ const razorpay =
 
 const computeTotals = (items) => {
   const subtotal = items.reduce((s, i) => s + i.price * i.qty, 0);
-  const totalProtein = items.reduce(
-    (s, i) => s + (i.protein || 0) * i.qty,
-    0
-  );
+  const totalProtein = items.reduce((s, i) => s + (i.protein || 0) * i.qty, 0);
   const totalCalories = items.reduce(
     (s, i) => s + (i.calories || 0) * i.qty,
     0
@@ -38,22 +35,16 @@ const computeTotals = (items) => {
 };
 
 const applyCoupon = (subtotal, coupon) => {
-  if (!coupon || !coupon.isActive) {
-    return { discount: 0, payable: subtotal };
-  }
+  if (!coupon || !coupon.isActive) return { discount: 0, payable: subtotal };
 
-  if (coupon.expiry && new Date(coupon.expiry) < new Date()) {
+  if (coupon.expiry && new Date(coupon.expiry) < new Date())
     return { discount: 0, payable: subtotal };
-  }
 
-  if (subtotal < coupon.minCartValue) {
+  if (coupon.minCartValue && subtotal < coupon.minCartValue)
     return { discount: 0, payable: subtotal };
-  }
 
   let discount =
-    coupon.type === "percent"
-      ? (coupon.value / 100) * subtotal
-      : coupon.value;
+    coupon.type === "percent" ? (coupon.value / 100) * subtotal : coupon.value;
 
   discount = Math.min(discount, coupon.maxDiscount || discount, subtotal);
 
@@ -66,6 +57,7 @@ const applyCoupon = (subtotal, coupon) => {
 /* =====================================================
    CREATE ORDER
    POST /api/checkout/create-order
+   ✅ Requires login (because we need user id)
 ===================================================== */
 router.post("/create-order", verifyAuth, async (req, res) => {
   try {
@@ -75,7 +67,7 @@ router.post("/create-order", verifyAuth, async (req, res) => {
 
     const { items, address, deliverySlot, couponCode } = req.body;
 
-    if (!items || !items.length) {
+    if (!items || !Array.isArray(items) || items.length === 0) {
       return res.status(400).json({ message: "Cart is empty" });
     }
 
@@ -94,19 +86,18 @@ router.post("/create-order", verifyAuth, async (req, res) => {
       return res.status(400).json({ message: "Delivery slot missing" });
     }
 
-    /* ✅ NORMALIZE ITEMS (MATCH ORDER SCHEMA) */
+    // ✅ Normalize items (match schema)
     const normalizedItems = items.map((i) => {
-      if (!i.mealId) {
-        throw new Error("Meal ID missing in cart item");
-      }
+      if (!i.mealId) throw new Error("Meal ID missing in cart item");
+      if (!i.qty || i.qty < 1) throw new Error("Invalid quantity");
 
       return {
         meal: i.mealId,
         title: i.title,
-        price: i.price,
-        protein: i.protein || 0,
-        calories: i.calories || 0,
-        qty: i.qty,
+        price: Number(i.price) || 0,
+        protein: Number(i.protein) || 0,
+        calories: Number(i.calories) || 0,
+        qty: Number(i.qty),
       };
     });
 
@@ -123,19 +114,17 @@ router.post("/create-order", verifyAuth, async (req, res) => {
 
     const { discount, payable } = applyCoupon(subtotal, coupon);
 
-    /* ---- Razorpay Order ---- */
+    // Razorpay order create
     const rzpOrder = await razorpay.orders.create({
       amount: payable * 100, // paise
       currency: "INR",
       receipt: `rcpt_${Date.now()}`,
     });
 
-    /* ---- Save Order in DB ---- */
+    // Save order in DB
     const order = await Order.create({
       user: req.user._id,
-
       items: normalizedItems,
-
       totals: {
         subtotal,
         discount,
@@ -143,19 +132,16 @@ router.post("/create-order", verifyAuth, async (req, res) => {
         totalProtein,
         totalCalories,
       },
-
       coupon: coupon
         ? {
             code: coupon.code,
             discount,
           }
         : undefined,
-
       delivery: {
         address,
         slot: deliverySlot,
       },
-
       payment: {
         provider: "razorpay",
         status: "created",
@@ -163,7 +149,7 @@ router.post("/create-order", verifyAuth, async (req, res) => {
       },
     });
 
-    res.json({
+    return res.json({
       keyId: process.env.RAZORPAY_KEY_ID,
       razorpayOrderId: rzpOrder.id,
       amount: payable * 100,
@@ -171,16 +157,21 @@ router.post("/create-order", verifyAuth, async (req, res) => {
       orderId: order._id,
     });
   } catch (err) {
-    console.error("❌ CREATE ORDER ERROR:", err.message);
-    res.status(500).json({ message: "Failed to create order" });
+    console.error("❌ CREATE ORDER ERROR:", err);
+    return res.status(500).json({
+      message: err?.message || "Failed to create order",
+    });
   }
 });
 
 /* =====================================================
    VERIFY PAYMENT
    POST /api/checkout/verify
+   ✅ IMPORTANT FIX:
+   - Removed verifyAuth so payment confirmation doesn't fail on expired token
+   - Confirms orderId belongs to razorpayOrderId stored in DB
 ===================================================== */
-router.post("/verify", verifyAuth, async (req, res) => {
+router.post("/verify", async (req, res) => {
   try {
     const {
       orderId,
@@ -189,13 +180,20 @@ router.post("/verify", verifyAuth, async (req, res) => {
       razorpay_signature,
     } = req.body;
 
-    const order = await Order.findById(orderId);
-    if (!order) {
-      return res.status(404).json({ message: "Order not found" });
+    if (!orderId || !razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+      return res.status(400).json({ message: "Missing payment verification fields" });
     }
 
-    const body = `${razorpay_order_id}|${razorpay_payment_id}`;
+    const order = await Order.findById(orderId);
+    if (!order) return res.status(404).json({ message: "Order not found" });
 
+    // ✅ Ensure this verify request matches the correct Razorpay order
+    if (order.payment?.razorpayOrderId !== razorpay_order_id) {
+      return res.status(400).json({ message: "Razorpay order mismatch" });
+    }
+
+    // ✅ Verify signature
+    const body = `${razorpay_order_id}|${razorpay_payment_id}`;
     const expectedSignature = crypto
       .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
       .update(body)
@@ -203,19 +201,25 @@ router.post("/verify", verifyAuth, async (req, res) => {
 
     if (expectedSignature !== razorpay_signature) {
       order.payment.status = "failed";
+      order.payment.razorpayPaymentId = razorpay_payment_id;
+      order.payment.razorpaySignature = razorpay_signature;
       await order.save();
       return res.status(400).json({ message: "Payment verification failed" });
     }
 
+    // ✅ Mark as paid
     order.payment.status = "paid";
     order.payment.razorpayPaymentId = razorpay_payment_id;
     order.payment.razorpaySignature = razorpay_signature;
+
     await order.save();
 
-    res.json({ message: "Payment verified successfully", order });
+    return res.json({ message: "Payment verified successfully", order });
   } catch (err) {
-    console.error("❌ VERIFY ERROR:", err.message);
-    res.status(500).json({ message: "Verification failed" });
+    console.error("❌ VERIFY ERROR:", err);
+    return res.status(500).json({
+      message: err?.message || "Verification failed",
+    });
   }
 });
 

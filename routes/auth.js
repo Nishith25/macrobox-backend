@@ -12,7 +12,7 @@ const router = express.Router();
 
 // ---------------- TOKEN HELPERS ----------------
 const createAccessToken = (userId) =>
-  jwt.sign({ id: userId }, process.env.JWT_SECRET, { expiresIn: "15m" });
+  jwt.sign({ id: userId }, process.env.JWT_SECRET, { expiresIn: "30m" });
 
 const createRefreshToken = (userId) =>
   jwt.sign({ id: userId }, process.env.JWT_REFRESH_SECRET, {
