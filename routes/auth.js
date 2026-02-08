@@ -1,3 +1,6 @@
+// backend/routes/auth.js
+// (BACKEND) MacroBox Auth Routes - UPDATED with Freeze/Deactivate logic + Reactivate on Signup
+
 const express = require("express");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
@@ -21,15 +24,68 @@ router.post("/signup", async (req, res) => {
   try {
     const { name, email, password } = req.body;
 
+    // Basic validation
+    if (!name || !email || !password) {
+      return res.status(400).json({ message: "All fields are required." });
+    }
+
     const existing = await User.findOne({ email });
-    if (existing)
+
+    // ✅ If user exists and is ACTIVE => block signup
+    if (existing && !existing.isDeactivated) {
       return res
         .status(400)
         .json({ message: "Email already in use. Please login instead." });
+    }
 
     const hashed = await bcrypt.hash(password, 10);
     const verificationToken = crypto.randomBytes(32).toString("hex");
 
+    // ✅ If user exists but DEACTIVATED => reactivate on signup
+    if (existing && existing.isDeactivated) {
+      existing.name = name;
+      existing.password = hashed;
+
+      existing.isDeactivated = false;
+      existing.deactivatedAt = null;
+
+      // recommended: unfreeze too on re-signup
+      existing.isFrozen = false;
+      existing.frozenAt = null;
+
+      // require email verification again (recommended)
+      existing.emailVerified = false;
+      existing.verificationToken = verificationToken;
+
+      // clear reset tokens if any
+      existing.resetPasswordToken = null;
+      existing.resetPasswordExpires = null;
+
+      await existing.save();
+
+      const link = `${process.env.FRONTEND_URL}/verify-email/${verificationToken}`;
+
+      await sendEmail(
+        email,
+        "Verify your MacroBox account",
+        `
+          <h2>Welcome back to MacroBox, ${name}! 🎉</h2>
+          <p>Your account was reactivated. Please verify your email again:</p>
+          <a href="${link}"
+             style="background:#22c55e;padding:12px 20px;color:white;
+             border-radius:6px;text-decoration:none;font-weight:bold;">
+            Verify Email
+          </a>
+        `
+      );
+
+      return res.json({
+        message:
+          "Account reactivated! Please check your email to verify your account.",
+      });
+    }
+
+    // ✅ Fresh signup (no existing user)
     await User.create({
       name,
       email,
@@ -55,7 +111,8 @@ router.post("/signup", async (req, res) => {
     );
 
     res.json({
-      message: "Signup successful! Please check your email to verify your account.",
+      message:
+        "Signup successful! Please check your email to verify your account.",
     });
   } catch (err) {
     console.error("Signup error:", err);
@@ -75,6 +132,7 @@ router.get("/verify-email/:token", async (req, res) => {
 
     res.json({ message: "Email verified successfully" });
   } catch (err) {
+    console.error("Verify email error:", err);
     res.status(500).json({ message: "Server error" });
   }
 });
@@ -87,6 +145,21 @@ router.post("/login", async (req, res) => {
     const user = await User.findOne({ email });
     if (!user)
       return res.status(404).json({ message: "User not registered." });
+
+    // ✅ NEW: Freeze/Deactivate checks (do this early)
+    if (user.isFrozen) {
+      return res.status(403).json({
+        message:
+          "Your account is freezed. Contact customer support to unfreeze it.",
+      });
+    }
+
+    if (user.isDeactivated) {
+      return res.status(403).json({
+        message:
+          "Your account is deactivated. Please sign up again to reactivate.",
+      });
+    }
 
     if (!user.emailVerified)
       return res.status(403).json({ message: "Please verify your email." });
@@ -137,6 +210,7 @@ router.post("/refresh", async (req, res) => {
       res.json({ token: newAccessToken });
     });
   } catch (err) {
+    console.error("Refresh error:", err);
     res.status(500).json({ message: "Server error" });
   }
 });
@@ -155,32 +229,37 @@ router.post("/logout", (req, res) => {
 
 // ---------------- FORGOT PASSWORD ----------------
 router.post("/forgot-password", async (req, res) => {
-  const { email } = req.body;
+  try {
+    const { email } = req.body;
 
-  const user = await User.findOne({ email });
-  if (!user) return res.json({ message: "Reset link sent if email exists" });
+    const user = await User.findOne({ email });
+    if (!user) return res.json({ message: "Reset link sent if email exists" });
 
-  const token = crypto.randomBytes(32).toString("hex");
-  user.resetPasswordToken = token;
-  user.resetPasswordExpires = Date.now() + 30 * 60 * 1000;
-  await user.save();
+    const token = crypto.randomBytes(32).toString("hex");
+    user.resetPasswordToken = token;
+    user.resetPasswordExpires = Date.now() + 30 * 60 * 1000;
+    await user.save();
 
-  const resetLink = `${process.env.FRONTEND_URL}/reset-password/${token}`;
+    const resetLink = `${process.env.FRONTEND_URL}/reset-password/${token}`;
 
-  await sendEmail(
-    email,
-    "MacroBox - Password Reset",
-    `
-      <h2>Password Reset</h2>
-      <p>Click below to reset your password:</p>
-      <a href="${resetLink}" style="color:#10b981;font-weight:bold;">
-        Reset Password
-      </a>
-      <p>This link expires in 30 minutes.</p>
-    `
-  );
+    await sendEmail(
+      email,
+      "MacroBox - Password Reset",
+      `
+        <h2>Password Reset</h2>
+        <p>Click below to reset your password:</p>
+        <a href="${resetLink}" style="color:#10b981;font-weight:bold;">
+          Reset Password
+        </a>
+        <p>This link expires in 30 minutes.</p>
+      `
+    );
 
-  res.json({ message: "Reset link sent to email" });
+    res.json({ message: "Reset link sent to email" });
+  } catch (err) {
+    console.error("Forgot password error:", err);
+    res.status(500).json({ message: "Server error" });
+  }
 });
 
 // ---------------- RESET PASSWORD ----------------
@@ -194,6 +273,10 @@ router.post("/reset-password/:token", async (req, res) => {
     if (!user)
       return res.status(400).json({ message: "Invalid or expired token" });
 
+    if (!req.body.password) {
+      return res.status(400).json({ message: "Password is required" });
+    }
+
     user.password = await bcrypt.hash(req.body.password, 10);
     user.resetPasswordToken = undefined;
     user.resetPasswordExpires = undefined;
@@ -201,6 +284,7 @@ router.post("/reset-password/:token", async (req, res) => {
 
     res.json({ message: "Password reset successfully!" });
   } catch (err) {
+    console.error("Reset password error:", err);
     res.status(500).json({ message: "Server error" });
   }
 });
@@ -211,8 +295,21 @@ router.post("/resend-verification", async (req, res) => {
     const { email } = req.body;
     const user = await User.findOne({ email });
 
-    if (!user)
-      return res.status(400).json({ message: "User not found" });
+    if (!user) return res.status(400).json({ message: "User not found" });
+
+    // Optional: block resend if frozen/deactivated (your choice)
+    if (user.isFrozen) {
+      return res.status(403).json({
+        message:
+          "Your account is freezed. Contact customer support to unfreeze it.",
+      });
+    }
+    if (user.isDeactivated) {
+      return res.status(403).json({
+        message:
+          "Your account is deactivated. Please sign up again to reactivate.",
+      });
+    }
 
     if (user.emailVerified)
       return res.status(400).json({ message: "Email already verified" });
@@ -238,6 +335,7 @@ router.post("/resend-verification", async (req, res) => {
 
     res.json({ message: "Verification email resent!" });
   } catch (err) {
+    console.error("Resend verification error:", err);
     res.status(500).json({ message: "Server error" });
   }
 });

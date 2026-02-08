@@ -1,20 +1,37 @@
+// backend/models/User.js
 const mongoose = require("mongoose");
 
 const userSchema = new mongoose.Schema(
   {
-    name: { type: String, required: true },
+    /* ================= BASIC ================= */
+    name: { type: String, required: true, trim: true },
 
-    email: { type: String, required: true, unique: true },
+    email: {
+      type: String,
+      required: true,
+      unique: true,
+      trim: true,
+      lowercase: true,
+    },
 
     password: { type: String, required: true },
 
-    role: { type: String, default: "user" },
+    role: { type: String, enum: ["user", "admin"], default: "user" },
 
+    /* ================= ACCOUNT STATUS (Freeze/Deactivate) ================= */
+    isDeactivated: { type: Boolean, default: false },
+    deactivatedAt: { type: Date, default: null },
+
+    isFrozen: { type: Boolean, default: false },
+    frozenAt: { type: Date, default: null },
+
+    /* ================= EMAIL / PASSWORD FLOWS ================= */
     emailVerified: { type: Boolean, default: false },
 
-    verificationToken: String,
-    resetPasswordToken: String,
-    resetPasswordExpires: Date,
+    verificationToken: { type: String, default: null },
+
+    resetPasswordToken: { type: String, default: null },
+    resetPasswordExpires: { type: Date, default: null },
 
     /* ================= FAVORITES ================= */
     favorites: [
@@ -25,33 +42,24 @@ const userSchema = new mongoose.Schema(
     ],
 
     /* ================= BODY METRICS ================= */
-bodyMetrics: {
-  height: Number,
-  weight: Number,
-  age: Number,
-  gender: {
-    type: String,
-    enum: ["male", "female"],
-  },
-  activity: {
-    type: String,
-    enum: ["sedentary", "light", "moderate", "active", "very_active"],
-  },
-  goalWeight: Number,
-  locked: {
-    type: Boolean,
-    default: false,
-  },
-},
-
+    bodyMetrics: {
+      height: { type: Number, default: null },
+      weight: { type: Number, default: null },
+      age: { type: Number, default: null },
+      gender: { type: String, enum: ["male", "female"], default: null },
+      activity: {
+        type: String,
+        enum: ["sedentary", "light", "moderate", "active", "very_active"],
+        default: null,
+      },
+      goalWeight: { type: Number, default: null },
+      locked: { type: Boolean, default: false },
+    },
 
     /* ================= DAY PLANS ================= */
     dayPlans: [
       {
-        date: {
-          type: Date,
-          required: true,
-        },
+        date: { type: Date, required: true },
         items: [
           {
             meal: {

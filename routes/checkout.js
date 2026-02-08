@@ -3,135 +3,175 @@ const Razorpay = require("razorpay");
 const crypto = require("crypto");
 const Order = require("../models/Order");
 const Coupon = require("../models/Coupon");
-const { verifyAuth } = require("../middleware/auth"); // ✅ FIX
+const { verifyAuth } = require("../middleware/auth");
 
 const router = express.Router();
 
-/* ===========================
-   RAZORPAY INSTANCE (SAFE)
-=========================== */
-if (
-  !process.env.RAZORPAY_KEY_ID ||
-  !process.env.RAZORPAY_KEY_SECRET
-) {
-  console.error("❌ Razorpay keys missing in .env");
-  throw new Error("Razorpay configuration error");
-}
+/* ================= RAZORPAY ================= */
 
-const razorpay = new Razorpay({
-  key_id: process.env.RAZORPAY_KEY_ID,
-  key_secret: process.env.RAZORPAY_KEY_SECRET,
-});
+const razorpay =
+  process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET
+    ? new Razorpay({
+        key_id: process.env.RAZORPAY_KEY_ID,
+        key_secret: process.env.RAZORPAY_KEY_SECRET,
+      })
+    : null;
 
-/* ===========================
-   HELPERS
-=========================== */
-function computeSubtotal(items) {
-  return items.reduce((sum, i) => sum + i.price * i.qty, 0);
-}
+/* ================= HELPERS ================= */
 
-function applyCoupon(subtotal, coupon) {
+const computeTotals = (items) => {
+  const subtotal = items.reduce((s, i) => s + i.price * i.qty, 0);
+  const totalProtein = items.reduce(
+    (s, i) => s + (i.protein || 0) * i.qty,
+    0
+  );
+  const totalCalories = items.reduce(
+    (s, i) => s + (i.calories || 0) * i.qty,
+    0
+  );
+
+  return {
+    subtotal: Math.round(subtotal),
+    totalProtein: Math.round(totalProtein),
+    totalCalories: Math.round(totalCalories),
+  };
+};
+
+const applyCoupon = (subtotal, coupon) => {
   if (!coupon || !coupon.isActive) {
-    return { discount: 0, total: subtotal };
+    return { discount: 0, payable: subtotal };
   }
 
   if (coupon.expiry && new Date(coupon.expiry) < new Date()) {
-    return { discount: 0, total: subtotal };
+    return { discount: 0, payable: subtotal };
   }
 
   if (subtotal < coupon.minCartValue) {
-    return { discount: 0, total: subtotal };
+    return { discount: 0, payable: subtotal };
   }
 
-  let discount = 0;
+  let discount =
+    coupon.type === "percent"
+      ? (coupon.value / 100) * subtotal
+      : coupon.value;
 
-  if (coupon.type === "flat") {
-    discount = coupon.value;
-  } else if (coupon.type === "percent") {
-    discount = (coupon.value / 100) * subtotal;
-  }
-
-  discount = Math.min(discount, coupon.maxDiscount || discount);
-  discount = Math.min(discount, subtotal);
+  discount = Math.min(discount, coupon.maxDiscount || discount, subtotal);
 
   return {
     discount: Math.round(discount),
-    total: Math.round(subtotal - discount),
+    payable: Math.round(subtotal - discount),
   };
-}
+};
 
 /* =====================================================
-   CREATE RAZORPAY ORDER + DB ORDER
+   CREATE ORDER
    POST /api/checkout/create-order
 ===================================================== */
 router.post("/create-order", verifyAuth, async (req, res) => {
   try {
-const { items, address, deliverySlot, couponCode } = req.body;
+    if (!razorpay) {
+      return res.status(500).json({ message: "Payment service unavailable" });
+    }
 
-if (!items || !items.length) {
-  return res.status(400).json({ message: "Cart is empty" });
-}
+    const { items, address, deliverySlot, couponCode } = req.body;
 
-if (
-  !address?.fullName ||
-  !address?.phone ||
-  !address?.line1 ||
-  !address?.city ||
-  !address?.state ||
-  !address?.pincode
-) {
-  return res.status(400).json({ message: "Address is incomplete" });
-}
+    if (!items || !items.length) {
+      return res.status(400).json({ message: "Cart is empty" });
+    }
 
-if (!deliverySlot?.date || !deliverySlot?.time) {
-  return res.status(400).json({ message: "Delivery slot missing" });
-}
+    if (
+      !address?.fullName ||
+      !address?.phone ||
+      !address?.line1 ||
+      !address?.city ||
+      !address?.state ||
+      !address?.pincode
+    ) {
+      return res.status(400).json({ message: "Address is incomplete" });
+    }
 
+    if (!deliverySlot?.date || !deliverySlot?.time) {
+      return res.status(400).json({ message: "Delivery slot missing" });
+    }
 
-    const subtotal = computeSubtotal(items);
+    /* ✅ NORMALIZE ITEMS (MATCH ORDER SCHEMA) */
+    const normalizedItems = items.map((i) => {
+      if (!i.mealId) {
+        throw new Error("Meal ID missing in cart item");
+      }
+
+      return {
+        meal: i.mealId,
+        title: i.title,
+        price: i.price,
+        protein: i.protein || 0,
+        calories: i.calories || 0,
+        qty: i.qty,
+      };
+    });
+
+    const { subtotal, totalProtein, totalCalories } =
+      computeTotals(normalizedItems);
 
     let coupon = null;
     if (couponCode) {
       coupon = await Coupon.findOne({
         code: couponCode.toUpperCase(),
+        isActive: true,
       });
     }
 
-    const { discount, total } = applyCoupon(subtotal, coupon);
+    const { discount, payable } = applyCoupon(subtotal, coupon);
 
-    /* ---- Razorpay order (amount in paise) ---- */
+    /* ---- Razorpay Order ---- */
     const rzpOrder = await razorpay.orders.create({
-      amount: total * 100,
+      amount: payable * 100, // paise
       currency: "INR",
       receipt: `rcpt_${Date.now()}`,
     });
 
-    /* ---- Save DB order ---- */
-    const dbOrder = await Order.create({
-  userId: req.user.id,
-  items,
-  subtotal,
-  discount,
-  total,
-  couponCode: coupon ? coupon.code : null,
-  address,
-  deliverySlot,
-  payment: {
-    razorpayOrderId: rzpOrder.id,
-    status: "created",
-  },
-});
+    /* ---- Save Order in DB ---- */
+    const order = await Order.create({
+      user: req.user._id,
 
+      items: normalizedItems,
+
+      totals: {
+        subtotal,
+        discount,
+        payable,
+        totalProtein,
+        totalCalories,
+      },
+
+      coupon: coupon
+        ? {
+            code: coupon.code,
+            discount,
+          }
+        : undefined,
+
+      delivery: {
+        address,
+        slot: deliverySlot,
+      },
+
+      payment: {
+        provider: "razorpay",
+        status: "created",
+        razorpayOrderId: rzpOrder.id,
+      },
+    });
 
     res.json({
       keyId: process.env.RAZORPAY_KEY_ID,
       razorpayOrderId: rzpOrder.id,
-      amount: total * 100,
+      amount: payable * 100,
       currency: "INR",
-      orderId: dbOrder._id,
+      orderId: order._id,
     });
   } catch (err) {
-    console.error("❌ CREATE ORDER ERROR:", err);
+    console.error("❌ CREATE ORDER ERROR:", err.message);
     res.status(500).json({ message: "Failed to create order" });
   }
 });
@@ -167,15 +207,15 @@ router.post("/verify", verifyAuth, async (req, res) => {
       return res.status(400).json({ message: "Payment verification failed" });
     }
 
+    order.payment.status = "paid";
     order.payment.razorpayPaymentId = razorpay_payment_id;
     order.payment.razorpaySignature = razorpay_signature;
-    order.payment.status = "paid";
     await order.save();
 
     res.json({ message: "Payment verified successfully", order });
   } catch (err) {
-    console.error("❌ VERIFY ERROR:", err);
-    res.status(500).json({ message: "Payment verification failed" });
+    console.error("❌ VERIFY ERROR:", err.message);
+    res.status(500).json({ message: "Verification failed" });
   }
 });
 
