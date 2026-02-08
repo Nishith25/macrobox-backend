@@ -1,5 +1,5 @@
 // backend/routes/auth.js
-// MacroBox Auth Routes - Freeze/Deactivate logic + Reactivate on Signup (Hardened)
+// MacroBox Auth Routes – FINAL (Hardened, Production-safe)
 
 const express = require("express");
 const bcrypt = require("bcryptjs");
@@ -10,26 +10,46 @@ const sendEmail = require("../utils/sendEmail");
 
 const router = express.Router();
 
-// ---------------- TOKEN HELPERS ----------------
+/* =====================================================
+   TOKEN HELPERS
+===================================================== */
+
 const createAccessToken = (userId) =>
   jwt.sign({ id: userId }, process.env.JWT_SECRET, { expiresIn: "30m" });
 
 const createRefreshToken = (userId) =>
   jwt.sign({ id: userId }, process.env.JWT_REFRESH_SECRET, { expiresIn: "7d" });
 
-// ---------------- SIGNUP ----------------
+/* =====================================================
+   HELPERS
+===================================================== */
+
+// ✅ Prevent enum validation crash (null is NOT allowed for enum)
+const cleanBodyMetrics = (bm) => {
+  if (!bm || typeof bm !== "object") return undefined;
+
+  const copy = { ...bm };
+
+  if (copy.gender == null || copy.gender === "") delete copy.gender;
+  if (copy.activity == null || copy.activity === "") delete copy.activity;
+
+  return copy;
+};
+
+/* =====================================================
+   SIGNUP
+===================================================== */
 router.post("/signup", async (req, res) => {
   try {
-    const { name, email, password } = req.body;
+    const { name, email, password, bodyMetrics } = req.body;
 
-    // Basic validation
     if (!name || !email || !password) {
       return res.status(400).json({ message: "All fields are required." });
     }
 
     const existing = await User.findOne({ email });
 
-    // ✅ If user exists and is ACTIVE => block signup
+    // ❌ Active user → block signup
     if (existing && !existing.isDeactivated) {
       return res
         .status(400)
@@ -39,7 +59,7 @@ router.post("/signup", async (req, res) => {
     const hashed = await bcrypt.hash(password, 10);
     const verificationToken = crypto.randomBytes(32).toString("hex");
 
-    // ✅ If user exists but DEACTIVATED => reactivate on signup
+    /* ---------- REACTIVATE DEACTIVATED USER ---------- */
     if (existing && existing.isDeactivated) {
       existing.name = name;
       existing.password = hashed;
@@ -47,32 +67,29 @@ router.post("/signup", async (req, res) => {
       existing.isDeactivated = false;
       existing.deactivatedAt = null;
 
-      // recommended: unfreeze too on re-signup
       existing.isFrozen = false;
       existing.frozenAt = null;
 
-      // require email verification again
       existing.emailVerified = false;
       existing.verificationToken = verificationToken;
 
-      // clear reset tokens if any
       existing.resetPasswordToken = null;
       existing.resetPasswordExpires = null;
 
+      existing.bodyMetrics = cleanBodyMetrics(bodyMetrics);
+
       await existing.save();
 
-      // ✅ Email sending should NOT crash signup
+      // Email should NOT crash signup
       try {
-        if (!process.env.FRONTEND_URL) {
-          console.warn("⚠️ FRONTEND_URL missing in env, cannot send verify link");
-        } else {
+        if (process.env.FRONTEND_URL) {
           const link = `${process.env.FRONTEND_URL}/verify-email/${verificationToken}`;
           await sendEmail(
             email,
             "Verify your MacroBox account",
             `
               <h2>Welcome back to MacroBox, ${name}! 🎉</h2>
-              <p>Your account was reactivated. Please verify your email again:</p>
+              <p>Your account was reactivated. Please verify your email:</p>
               <a href="${link}"
                  style="background:#22c55e;padding:12px 20px;color:white;
                  border-radius:6px;text-decoration:none;font-weight:bold;">
@@ -81,8 +98,8 @@ router.post("/signup", async (req, res) => {
             `
           );
         }
-      } catch (mailErr) {
-        console.error("⚠️ Reactivation email failed:", mailErr);
+      } catch (err) {
+        console.error("⚠️ Reactivation email failed:", err);
       }
 
       return res.json({
@@ -91,20 +108,18 @@ router.post("/signup", async (req, res) => {
       });
     }
 
-    // ✅ Fresh signup (no existing user)
+    /* ---------- FRESH SIGNUP ---------- */
     const newUser = await User.create({
       name,
       email,
       password: hashed,
       emailVerified: false,
       verificationToken,
+      bodyMetrics: cleanBodyMetrics(bodyMetrics),
     });
 
-    // ✅ Email sending should NOT crash signup
     try {
-      if (!process.env.FRONTEND_URL) {
-        console.warn("⚠️ FRONTEND_URL missing in env, cannot send verify link");
-      } else {
+      if (process.env.FRONTEND_URL) {
         const link = `${process.env.FRONTEND_URL}/verify-email/${verificationToken}`;
         await sendEmail(
           email,
@@ -120,9 +135,8 @@ router.post("/signup", async (req, res) => {
           `
         );
       }
-    } catch (mailErr) {
-      console.error("⚠️ Signup verification email failed:", mailErr);
-      // user is still created; frontend can use "resend verification"
+    } catch (err) {
+      console.error("⚠️ Signup verification email failed:", err);
     }
 
     return res.status(201).json({
@@ -136,7 +150,9 @@ router.post("/signup", async (req, res) => {
   }
 });
 
-// ---------------- VERIFY EMAIL ----------------
+/* =====================================================
+   VERIFY EMAIL
+===================================================== */
 router.get("/verify-email/:token", async (req, res) => {
   try {
     const user = await User.findOne({ verificationToken: req.params.token });
@@ -153,7 +169,9 @@ router.get("/verify-email/:token", async (req, res) => {
   }
 });
 
-// ---------------- LOGIN ----------------
+/* =====================================================
+   LOGIN
+===================================================== */
 router.post("/login", async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -161,7 +179,6 @@ router.post("/login", async (req, res) => {
     const user = await User.findOne({ email });
     if (!user) return res.status(404).json({ message: "User not registered." });
 
-    // ✅ Freeze/Deactivate checks
     if (user.isFrozen) {
       return res.status(403).json({
         message:
@@ -181,17 +198,17 @@ router.post("/login", async (req, res) => {
     }
 
     const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch) return res.status(400).json({ message: "Incorrect password." });
+    if (!isMatch)
+      return res.status(400).json({ message: "Incorrect password." });
 
     if (!process.env.JWT_SECRET || !process.env.JWT_REFRESH_SECRET) {
-      console.error("❌ JWT env missing (JWT_SECRET / JWT_REFRESH_SECRET)");
+      console.error("❌ JWT env missing");
       return res.status(500).json({ message: "Server configuration error" });
     }
 
     const accessToken = createAccessToken(user._id);
     const refreshToken = createRefreshToken(user._id);
 
-    // ✅ Secure HTTP-only cookie
     res.cookie("refreshToken", refreshToken, {
       httpOnly: true,
       secure: true,
@@ -215,7 +232,9 @@ router.post("/login", async (req, res) => {
   }
 });
 
-// ---------------- REFRESH TOKEN ----------------
+/* =====================================================
+   REFRESH TOKEN
+===================================================== */
 router.post("/refresh", async (req, res) => {
   try {
     const token = req.cookies?.refreshToken;
@@ -223,9 +242,7 @@ router.post("/refresh", async (req, res) => {
 
     jwt.verify(token, process.env.JWT_REFRESH_SECRET, (err, decoded) => {
       if (err) return res.status(403).json({ message: "Invalid refresh token" });
-
-      const newAccessToken = createAccessToken(decoded.id);
-      res.json({ token: newAccessToken });
+      res.json({ token: createAccessToken(decoded.id) });
     });
   } catch (err) {
     console.error("❌ Refresh error:", err);
@@ -233,7 +250,9 @@ router.post("/refresh", async (req, res) => {
   }
 });
 
-// ---------------- LOGOUT ----------------
+/* =====================================================
+   LOGOUT
+===================================================== */
 router.post("/logout", (req, res) => {
   res.clearCookie("refreshToken", {
     httpOnly: true,
@@ -245,7 +264,9 @@ router.post("/logout", (req, res) => {
   res.json({ message: "Logged out successfully" });
 });
 
-// ---------------- FORGOT PASSWORD ----------------
+/* =====================================================
+   FORGOT PASSWORD
+===================================================== */
 router.post("/forgot-password", async (req, res) => {
   try {
     const { email } = req.body;
@@ -259,16 +280,13 @@ router.post("/forgot-password", async (req, res) => {
     await user.save();
 
     try {
-      if (!process.env.FRONTEND_URL) {
-        console.warn("⚠️ FRONTEND_URL missing in env, cannot send reset link");
-      } else {
+      if (process.env.FRONTEND_URL) {
         const resetLink = `${process.env.FRONTEND_URL}/reset-password/${token}`;
         await sendEmail(
           email,
           "MacroBox - Password Reset",
           `
             <h2>Password Reset</h2>
-            <p>Click below to reset your password:</p>
             <a href="${resetLink}" style="color:#10b981;font-weight:bold;">
               Reset Password
             </a>
@@ -276,8 +294,8 @@ router.post("/forgot-password", async (req, res) => {
           `
         );
       }
-    } catch (mailErr) {
-      console.error("⚠️ Forgot password email failed:", mailErr);
+    } catch (err) {
+      console.error("⚠️ Forgot password email failed:", err);
     }
 
     res.json({ message: "Reset link sent to email" });
@@ -287,7 +305,9 @@ router.post("/forgot-password", async (req, res) => {
   }
 });
 
-// ---------------- RESET PASSWORD ----------------
+/* =====================================================
+   RESET PASSWORD
+===================================================== */
 router.post("/reset-password/:token", async (req, res) => {
   try {
     const user = await User.findOne({
@@ -295,8 +315,11 @@ router.post("/reset-password/:token", async (req, res) => {
       resetPasswordExpires: { $gt: Date.now() },
     });
 
-    if (!user) return res.status(400).json({ message: "Invalid or expired token" });
-    if (!req.body.password) return res.status(400).json({ message: "Password is required" });
+    if (!user)
+      return res.status(400).json({ message: "Invalid or expired token" });
+
+    if (!req.body.password)
+      return res.status(400).json({ message: "Password is required" });
 
     user.password = await bcrypt.hash(req.body.password, 10);
     user.resetPasswordToken = undefined;
@@ -310,7 +333,9 @@ router.post("/reset-password/:token", async (req, res) => {
   }
 });
 
-// ---------------- RESEND VERIFICATION ----------------
+/* =====================================================
+   RESEND VERIFICATION
+===================================================== */
 router.post("/resend-verification", async (req, res) => {
   try {
     const { email } = req.body;
@@ -318,16 +343,9 @@ router.post("/resend-verification", async (req, res) => {
 
     if (!user) return res.status(400).json({ message: "User not found" });
 
-    if (user.isFrozen) {
+    if (user.isFrozen || user.isDeactivated) {
       return res.status(403).json({
-        message:
-          "Your account is freezed. Contact customer support to unfreeze it.",
-      });
-    }
-    if (user.isDeactivated) {
-      return res.status(403).json({
-        message:
-          "Your account is deactivated. Please sign up again to reactivate.",
+        message: "Account not active. Contact support.",
       });
     }
 
@@ -339,9 +357,7 @@ router.post("/resend-verification", async (req, res) => {
     await user.save();
 
     try {
-      if (!process.env.FRONTEND_URL) {
-        console.warn("⚠️ FRONTEND_URL missing in env, cannot send verify link");
-      } else {
+      if (process.env.FRONTEND_URL) {
         const link = `${process.env.FRONTEND_URL}/verify-email/${newToken}`;
         await sendEmail(
           email,
@@ -356,8 +372,8 @@ router.post("/resend-verification", async (req, res) => {
           `
         );
       }
-    } catch (mailErr) {
-      console.error("⚠️ Resend verification email failed:", mailErr);
+    } catch (err) {
+      console.error("⚠️ Resend verification email failed:", err);
     }
 
     res.json({ message: "Verification email resent!" });

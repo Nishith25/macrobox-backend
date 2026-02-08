@@ -43,15 +43,24 @@ const userSchema = new mongoose.Schema(
 
     /* ================= BODY METRICS ================= */
     bodyMetrics: {
+      // numbers can safely be null
       height: { type: Number, default: null },
       weight: { type: Number, default: null },
       age: { type: Number, default: null },
-      gender: { type: String, enum: ["male", "female"], default: null },
+
+      // ✅ FIX: enum fields must NOT default to null
+      gender: {
+        type: String,
+        enum: ["male", "female"],
+        default: undefined,
+      },
+
       activity: {
         type: String,
         enum: ["sedentary", "light", "moderate", "active", "very_active"],
-        default: null,
+        default: undefined,
       },
+
       goalWeight: { type: Number, default: null },
       locked: { type: Boolean, default: false },
     },
