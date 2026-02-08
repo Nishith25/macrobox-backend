@@ -1,5 +1,5 @@
 // backend/routes/auth.js
-// (BACKEND) MacroBox Auth Routes - UPDATED with Freeze/Deactivate logic + Reactivate on Signup
+// MacroBox Auth Routes - Freeze/Deactivate logic + Reactivate on Signup (Hardened)
 
 const express = require("express");
 const bcrypt = require("bcryptjs");
@@ -15,9 +15,7 @@ const createAccessToken = (userId) =>
   jwt.sign({ id: userId }, process.env.JWT_SECRET, { expiresIn: "30m" });
 
 const createRefreshToken = (userId) =>
-  jwt.sign({ id: userId }, process.env.JWT_REFRESH_SECRET, {
-    expiresIn: "7d",
-  });
+  jwt.sign({ id: userId }, process.env.JWT_REFRESH_SECRET, { expiresIn: "7d" });
 
 // ---------------- SIGNUP ----------------
 router.post("/signup", async (req, res) => {
@@ -53,7 +51,7 @@ router.post("/signup", async (req, res) => {
       existing.isFrozen = false;
       existing.frozenAt = null;
 
-      // require email verification again (recommended)
+      // require email verification again
       existing.emailVerified = false;
       existing.verificationToken = verificationToken;
 
@@ -63,21 +61,29 @@ router.post("/signup", async (req, res) => {
 
       await existing.save();
 
-      const link = `${process.env.FRONTEND_URL}/verify-email/${verificationToken}`;
-
-      await sendEmail(
-        email,
-        "Verify your MacroBox account",
-        `
-          <h2>Welcome back to MacroBox, ${name}! 🎉</h2>
-          <p>Your account was reactivated. Please verify your email again:</p>
-          <a href="${link}"
-             style="background:#22c55e;padding:12px 20px;color:white;
-             border-radius:6px;text-decoration:none;font-weight:bold;">
-            Verify Email
-          </a>
-        `
-      );
+      // ✅ Email sending should NOT crash signup
+      try {
+        if (!process.env.FRONTEND_URL) {
+          console.warn("⚠️ FRONTEND_URL missing in env, cannot send verify link");
+        } else {
+          const link = `${process.env.FRONTEND_URL}/verify-email/${verificationToken}`;
+          await sendEmail(
+            email,
+            "Verify your MacroBox account",
+            `
+              <h2>Welcome back to MacroBox, ${name}! 🎉</h2>
+              <p>Your account was reactivated. Please verify your email again:</p>
+              <a href="${link}"
+                 style="background:#22c55e;padding:12px 20px;color:white;
+                 border-radius:6px;text-decoration:none;font-weight:bold;">
+                Verify Email
+              </a>
+            `
+          );
+        }
+      } catch (mailErr) {
+        console.error("⚠️ Reactivation email failed:", mailErr);
+      }
 
       return res.json({
         message:
@@ -86,7 +92,7 @@ router.post("/signup", async (req, res) => {
     }
 
     // ✅ Fresh signup (no existing user)
-    await User.create({
+    const newUser = await User.create({
       name,
       email,
       password: hashed,
@@ -94,29 +100,39 @@ router.post("/signup", async (req, res) => {
       verificationToken,
     });
 
-    const link = `${process.env.FRONTEND_URL}/verify-email/${verificationToken}`;
+    // ✅ Email sending should NOT crash signup
+    try {
+      if (!process.env.FRONTEND_URL) {
+        console.warn("⚠️ FRONTEND_URL missing in env, cannot send verify link");
+      } else {
+        const link = `${process.env.FRONTEND_URL}/verify-email/${verificationToken}`;
+        await sendEmail(
+          email,
+          "Verify your MacroBox account",
+          `
+            <h2>Welcome to MacroBox, ${name}! 🎉</h2>
+            <p>Click below to verify your email:</p>
+            <a href="${link}"
+               style="background:#22c55e;padding:12px 20px;color:white;
+               border-radius:6px;text-decoration:none;font-weight:bold;">
+              Verify Email
+            </a>
+          `
+        );
+      }
+    } catch (mailErr) {
+      console.error("⚠️ Signup verification email failed:", mailErr);
+      // user is still created; frontend can use "resend verification"
+    }
 
-    await sendEmail(
-      email,
-      "Verify your MacroBox account",
-      `
-        <h2>Welcome to MacroBox, ${name}! 🎉</h2>
-        <p>Click below to verify your email:</p>
-        <a href="${link}"
-           style="background:#22c55e;padding:12px 20px;color:white;
-           border-radius:6px;text-decoration:none;font-weight:bold;">
-          Verify Email
-        </a>
-      `
-    );
-
-    res.json({
+    return res.status(201).json({
       message:
         "Signup successful! Please check your email to verify your account.",
+      userId: newUser._id,
     });
   } catch (err) {
-    console.error("Signup error:", err);
-    res.status(500).json({ message: "Server error" });
+    console.error("❌ Signup error:", err);
+    return res.status(500).json({ message: "Server error" });
   }
 });
 
@@ -132,7 +148,7 @@ router.get("/verify-email/:token", async (req, res) => {
 
     res.json({ message: "Email verified successfully" });
   } catch (err) {
-    console.error("Verify email error:", err);
+    console.error("❌ Verify email error:", err);
     res.status(500).json({ message: "Server error" });
   }
 });
@@ -143,10 +159,9 @@ router.post("/login", async (req, res) => {
     const { email, password } = req.body;
 
     const user = await User.findOne({ email });
-    if (!user)
-      return res.status(404).json({ message: "User not registered." });
+    if (!user) return res.status(404).json({ message: "User not registered." });
 
-    // ✅ NEW: Freeze/Deactivate checks (do this early)
+    // ✅ Freeze/Deactivate checks
     if (user.isFrozen) {
       return res.status(403).json({
         message:
@@ -161,12 +176,17 @@ router.post("/login", async (req, res) => {
       });
     }
 
-    if (!user.emailVerified)
+    if (!user.emailVerified) {
       return res.status(403).json({ message: "Please verify your email." });
+    }
 
     const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch)
-      return res.status(400).json({ message: "Incorrect password." });
+    if (!isMatch) return res.status(400).json({ message: "Incorrect password." });
+
+    if (!process.env.JWT_SECRET || !process.env.JWT_REFRESH_SECRET) {
+      console.error("❌ JWT env missing (JWT_SECRET / JWT_REFRESH_SECRET)");
+      return res.status(500).json({ message: "Server configuration error" });
+    }
 
     const accessToken = createAccessToken(user._id);
     const refreshToken = createRefreshToken(user._id);
@@ -190,7 +210,7 @@ router.post("/login", async (req, res) => {
       token: accessToken,
     });
   } catch (err) {
-    console.error("Login error:", err);
+    console.error("❌ Login error:", err);
     res.status(500).json({ message: "Server error" });
   }
 });
@@ -198,19 +218,17 @@ router.post("/login", async (req, res) => {
 // ---------------- REFRESH TOKEN ----------------
 router.post("/refresh", async (req, res) => {
   try {
-    const token = req.cookies.refreshToken;
-    if (!token)
-      return res.status(401).json({ message: "No refresh token" });
+    const token = req.cookies?.refreshToken;
+    if (!token) return res.status(401).json({ message: "No refresh token" });
 
     jwt.verify(token, process.env.JWT_REFRESH_SECRET, (err, decoded) => {
-      if (err)
-        return res.status(403).json({ message: "Invalid refresh token" });
+      if (err) return res.status(403).json({ message: "Invalid refresh token" });
 
       const newAccessToken = createAccessToken(decoded.id);
       res.json({ token: newAccessToken });
     });
   } catch (err) {
-    console.error("Refresh error:", err);
+    console.error("❌ Refresh error:", err);
     res.status(500).json({ message: "Server error" });
   }
 });
@@ -240,24 +258,31 @@ router.post("/forgot-password", async (req, res) => {
     user.resetPasswordExpires = Date.now() + 30 * 60 * 1000;
     await user.save();
 
-    const resetLink = `${process.env.FRONTEND_URL}/reset-password/${token}`;
-
-    await sendEmail(
-      email,
-      "MacroBox - Password Reset",
-      `
-        <h2>Password Reset</h2>
-        <p>Click below to reset your password:</p>
-        <a href="${resetLink}" style="color:#10b981;font-weight:bold;">
-          Reset Password
-        </a>
-        <p>This link expires in 30 minutes.</p>
-      `
-    );
+    try {
+      if (!process.env.FRONTEND_URL) {
+        console.warn("⚠️ FRONTEND_URL missing in env, cannot send reset link");
+      } else {
+        const resetLink = `${process.env.FRONTEND_URL}/reset-password/${token}`;
+        await sendEmail(
+          email,
+          "MacroBox - Password Reset",
+          `
+            <h2>Password Reset</h2>
+            <p>Click below to reset your password:</p>
+            <a href="${resetLink}" style="color:#10b981;font-weight:bold;">
+              Reset Password
+            </a>
+            <p>This link expires in 30 minutes.</p>
+          `
+        );
+      }
+    } catch (mailErr) {
+      console.error("⚠️ Forgot password email failed:", mailErr);
+    }
 
     res.json({ message: "Reset link sent to email" });
   } catch (err) {
-    console.error("Forgot password error:", err);
+    console.error("❌ Forgot password error:", err);
     res.status(500).json({ message: "Server error" });
   }
 });
@@ -270,12 +295,8 @@ router.post("/reset-password/:token", async (req, res) => {
       resetPasswordExpires: { $gt: Date.now() },
     });
 
-    if (!user)
-      return res.status(400).json({ message: "Invalid or expired token" });
-
-    if (!req.body.password) {
-      return res.status(400).json({ message: "Password is required" });
-    }
+    if (!user) return res.status(400).json({ message: "Invalid or expired token" });
+    if (!req.body.password) return res.status(400).json({ message: "Password is required" });
 
     user.password = await bcrypt.hash(req.body.password, 10);
     user.resetPasswordToken = undefined;
@@ -284,7 +305,7 @@ router.post("/reset-password/:token", async (req, res) => {
 
     res.json({ message: "Password reset successfully!" });
   } catch (err) {
-    console.error("Reset password error:", err);
+    console.error("❌ Reset password error:", err);
     res.status(500).json({ message: "Server error" });
   }
 });
@@ -297,7 +318,6 @@ router.post("/resend-verification", async (req, res) => {
 
     if (!user) return res.status(400).json({ message: "User not found" });
 
-    // Optional: block resend if frozen/deactivated (your choice)
     if (user.isFrozen) {
       return res.status(403).json({
         message:
@@ -318,24 +338,31 @@ router.post("/resend-verification", async (req, res) => {
     user.verificationToken = newToken;
     await user.save();
 
-    const link = `${process.env.FRONTEND_URL}/verify-email/${newToken}`;
-
-    await sendEmail(
-      email,
-      "Verify your MacroBox account",
-      `
-        <h2>Email Verification</h2>
-        <a href="${link}"
-           style="background:#22c55e;padding:10px 18px;color:white;
-           border-radius:6px;text-decoration:none;font-weight:bold;">
-          Verify Email
-        </a>
-      `
-    );
+    try {
+      if (!process.env.FRONTEND_URL) {
+        console.warn("⚠️ FRONTEND_URL missing in env, cannot send verify link");
+      } else {
+        const link = `${process.env.FRONTEND_URL}/verify-email/${newToken}`;
+        await sendEmail(
+          email,
+          "Verify your MacroBox account",
+          `
+            <h2>Email Verification</h2>
+            <a href="${link}"
+               style="background:#22c55e;padding:10px 18px;color:white;
+               border-radius:6px;text-decoration:none;font-weight:bold;">
+              Verify Email
+            </a>
+          `
+        );
+      }
+    } catch (mailErr) {
+      console.error("⚠️ Resend verification email failed:", mailErr);
+    }
 
     res.json({ message: "Verification email resent!" });
   } catch (err) {
-    console.error("Resend verification error:", err);
+    console.error("❌ Resend verification error:", err);
     res.status(500).json({ message: "Server error" });
   }
 });
