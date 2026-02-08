@@ -10,11 +10,16 @@ apiInstance.setApiKey(
 
 async function sendEmail(to, subject, html) {
   try {
+    if (!process.env.BREVO_API_KEY) {
+      console.warn("⚠️ BREVO_API_KEY missing. Email skipped.");
+      return;
+    }
+
     const email = new Brevo.SendSmtpEmail();
 
     email.sender = {
       name: "MacroBox",
-      email: process.env.BREVO_SENDER || "no-reply@macrobox.com",
+      email: process.env.BREVO_SENDER || "no-reply@macrobox.co.in",
     };
 
     email.to = [{ email: to }];
@@ -22,15 +27,20 @@ async function sendEmail(to, subject, html) {
     email.htmlContent = html;
 
     console.log("📨 Sending Email To:", to);
-    console.log("📧 Subject:", subject);
 
     const response = await apiInstance.sendTransacEmail(email);
-    console.log("✅ Email sent successfully:", response.messageId || response);
+    console.log("✅ Email sent:", response.messageId || "OK");
 
     return response;
   } catch (error) {
-    console.error("❌ EMAIL ERROR:", error.response?.data || error.message || error);
-    throw new Error("Email sending failed");
+    // 🚫 DO NOT THROW
+    console.error(
+      "❌ EMAIL FAILED:",
+      error.response?.body || error.message || error
+    );
+
+    // Allow signup to continue
+    return null;
   }
 }
 
