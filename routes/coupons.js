@@ -39,6 +39,64 @@ const computeDiscount = (subtotal, coupon) => {
   return discount;
 };
 
+const userUsedCount = (coupon, userId) => {
+  const row = coupon.usedBy?.find((u) => String(u.user) === String(userId));
+  return row?.count || 0;
+};
+
+const isEligibleForUser = (coupon, userId, subtotal) => {
+  if (!coupon.isActive) return false;
+
+  const now = new Date();
+  const { from, to } = resolveValidity(coupon);
+
+  if (from && now < from) return false;
+  if (to && now > to) return false;
+
+  if (subtotal < Number(coupon.minCartTotal || 0)) return false;
+
+  if (coupon.usageLimitTotal > 0 && (coupon.usedCount || 0) >= coupon.usageLimitTotal) {
+    return false;
+  }
+
+  const usedTimes = userUsedCount(coupon, userId);
+  const perUserLimit = coupon.usageLimitPerUser || 1;
+  if (usedTimes >= perUserLimit) return false;
+
+  return true;
+};
+
+/* =========================
+   ✅ AVAILABLE COUPONS (USER)
+   GET /api/coupons/available?cartTotal=123
+   Returns only eligible coupons for this user
+========================= */
+router.get("/available", verifyAuth, async (req, res) => {
+  try {
+    const subtotal = Number(req.query.cartTotal || 0);
+
+    // Pull active coupons only (faster)
+    const coupons = await Coupon.find({ isActive: true }).sort({ createdAt: -1 });
+
+    const eligible = coupons
+      .filter((c) => isEligibleForUser(c, req.user._id, subtotal))
+      .map((c) => ({
+        code: c.code,
+        type: c.type,
+        value: c.value,
+        minCartTotal: c.minCartTotal || 0,
+        maxDiscount: c.maxDiscount || 0,
+        validFrom: c.validFrom || null,
+        validTo: c.validTo || null,
+      }));
+
+    return res.json(eligible);
+  } catch (err) {
+    console.error("Available coupons error:", err);
+    return res.status(500).json({ message: "Failed to fetch available coupons" });
+  }
+});
+
 /* =========================
    APPLY COUPON (USER)
    POST /api/coupons/apply
@@ -60,18 +118,12 @@ router.post("/apply", verifyAuth, async (req, res) => {
     const now = new Date();
     const { from, to } = resolveValidity(coupon);
 
-    if (from && now < from) {
-      return res.status(400).json({ message: "Coupon not active yet" });
-    }
-    if (to && now > to) {
-      return res.status(400).json({ message: "Coupon expired" });
-    }
+    if (from && now < from) return res.status(400).json({ message: "Coupon not active yet" });
+    if (to && now > to) return res.status(400).json({ message: "Coupon expired" });
 
     const subtotal = Number(cartTotal || 0);
     if (subtotal < coupon.minCartTotal) {
-      return res
-        .status(400)
-        .json({ message: `Minimum cart total ₹${coupon.minCartTotal}` });
+      return res.status(400).json({ message: `Minimum cart total ₹${coupon.minCartTotal}` });
     }
 
     // total usage
@@ -80,11 +132,8 @@ router.post("/apply", verifyAuth, async (req, res) => {
     }
 
     // per user usage
-    const usedBy = coupon.usedBy.find(
-      (u) => u.user.toString() === req.user._id.toString()
-    );
-    const usedTimes = usedBy?.count || 0;
-    if (usedTimes >= coupon.usageLimitPerUser) {
+    const usedTimes = userUsedCount(coupon, req.user._id);
+    if (usedTimes >= (coupon.usageLimitPerUser || 1)) {
       return res.status(400).json({ message: "You already used this coupon" });
     }
 
@@ -109,8 +158,6 @@ router.post("/", verifyAuth, verifyAdmin, async (req, res) => {
     const payload = { ...req.body };
     payload.code = String(payload.code).toUpperCase().trim();
 
-    // ✅ ensure validTo is stored as date (UI sends YYYY-MM-DD)
-    // we keep it as Date; expiration inclusive is handled in resolveValidity()
     const created = await Coupon.create(payload);
     res.status(201).json(created);
   } catch (err) {

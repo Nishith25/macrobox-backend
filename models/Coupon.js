@@ -17,7 +17,7 @@ const couponSchema = new mongoose.Schema(
     minCartTotal: { type: Number, default: 0 },
     maxDiscount: { type: Number, default: 0 }, // only for percent (0 = no cap)
 
-    // ✅ NEW: validity range
+    // ✅ validity range
     validFrom: { type: Date, default: null },
     validTo: { type: Date, default: null },
 

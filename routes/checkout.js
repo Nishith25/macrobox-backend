@@ -1,6 +1,8 @@
 // backend/routes/checkout.js (BACKEND)
 // MacroBox Checkout Routes - Single Time Slots + Slot Availability + Razorpay verify hardening
 // ✅ Coupon usage increments only after successful payment
+// ✅ Uses validFrom/validTo (inclusive validTo) with expiresAt fallback
+// ✅ Auto-disables coupon if total usage limit reached (optional but recommended)
 
 const express = require("express");
 const Razorpay = require("razorpay");
@@ -62,6 +64,8 @@ const isSlotAtLeastHoursFromNow = (slotDateTime, hours) => {
 };
 
 /* ================= COUPON HELPERS ================= */
+
+// Make "validTo" inclusive for the whole day (23:59:59.999)
 const endOfDay = (d) => {
   const x = new Date(d);
   x.setHours(23, 59, 59, 999);
@@ -69,11 +73,11 @@ const endOfDay = (d) => {
 };
 
 const resolveValidity = (coupon) => {
-  const from = coupon.validFrom ? new Date(coupon.validFrom) : null;
+  const from = coupon?.validFrom ? new Date(coupon.validFrom) : null;
 
   let to = null;
-  if (coupon.validTo) to = endOfDay(coupon.validTo);
-  else if (coupon.expiresAt) to = new Date(coupon.expiresAt);
+  if (coupon?.validTo) to = endOfDay(coupon.validTo);
+  else if (coupon?.expiresAt) to = new Date(coupon.expiresAt);
 
   return { from, to };
 };
@@ -93,7 +97,10 @@ const computeDiscount = (subtotal, coupon) => {
 };
 
 const validateCouponForUser = (coupon, userId, subtotal) => {
-  if (!coupon || !coupon.isActive) return { ok: true, discount: 0 };
+  // If couponCode not provided, we call with null and treat as OK with 0 discount
+  if (!coupon) return { ok: true, discount: 0 };
+
+  if (!coupon.isActive) return { ok: false, message: "Invalid coupon" };
 
   const now = new Date();
   const { from, to } = resolveValidity(coupon);
@@ -124,7 +131,10 @@ const validateCouponForUser = (coupon, userId, subtotal) => {
 const computeTotals = (items) => {
   const subtotal = items.reduce((s, i) => s + i.price * i.qty, 0);
   const totalProtein = items.reduce((s, i) => s + (i.protein || 0) * i.qty, 0);
-  const totalCalories = items.reduce((s, i) => s + (i.calories || 0) * i.qty, 0);
+  const totalCalories = items.reduce(
+    (s, i) => s + (i.calories || 0) * i.qty,
+    0
+  );
 
   return {
     subtotal: Math.round(subtotal),
@@ -180,6 +190,7 @@ router.post("/create-order", verifyAuth, async (req, res) => {
     const normalizedItems = items.map((i) => {
       if (!i.mealId) throw new Error("Meal ID missing in cart item");
       if (!i.qty || i.qty < 1) throw new Error("Invalid quantity");
+
       return {
         meal: i.mealId,
         title: i.title,
@@ -190,7 +201,8 @@ router.post("/create-order", verifyAuth, async (req, res) => {
       };
     });
 
-    const { subtotal, totalProtein, totalCalories } = computeTotals(normalizedItems);
+    const { subtotal, totalProtein, totalCalories } =
+      computeTotals(normalizedItems);
 
     // coupon (validate but DO NOT increment usage here)
     let coupon = null;
@@ -228,7 +240,7 @@ router.post("/create-order", verifyAuth, async (req, res) => {
         ? {
             code: coupon.code,
             discount,
-            redeemed: false, // ✅ NEW FLAG (prevents double usage increment)
+            redeemed: false, // ✅ prevents double usage increment
           }
         : undefined,
       delivery: {
@@ -251,7 +263,9 @@ router.post("/create-order", verifyAuth, async (req, res) => {
     });
   } catch (err) {
     console.error("❌ CREATE ORDER ERROR:", err);
-    return res.status(500).json({ message: err?.message || "Failed to create order" });
+    return res
+      .status(500)
+      .json({ message: err?.message || "Failed to create order" });
   }
 });
 
@@ -262,11 +276,22 @@ router.post("/create-order", verifyAuth, async (req, res) => {
 ===================================================== */
 router.post("/verify", async (req, res) => {
   try {
-    const { orderId, razorpay_order_id, razorpay_payment_id, razorpay_signature } =
-      req.body;
+    const {
+      orderId,
+      razorpay_order_id,
+      razorpay_payment_id,
+      razorpay_signature,
+    } = req.body;
 
-    if (!orderId || !razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
-      return res.status(400).json({ message: "Missing payment verification fields" });
+    if (
+      !orderId ||
+      !razorpay_order_id ||
+      !razorpay_payment_id ||
+      !razorpay_signature
+    ) {
+      return res
+        .status(400)
+        .json({ message: "Missing payment verification fields" });
     }
 
     const order = await Order.findById(orderId);
@@ -302,25 +327,39 @@ router.post("/verify", async (req, res) => {
 
     // ✅ increment coupon usage only ONCE
     if (order.coupon?.code && !order.coupon.redeemed) {
-      const coupon = await Coupon.findOne({ code: String(order.coupon.code).toUpperCase() });
+      const coupon = await Coupon.findOne({
+        code: String(order.coupon.code).toUpperCase().trim(),
+      });
+
       if (coupon) {
-        // Re-check limits (optional safety)
-        // If coupon is over limit, we still keep order paid, but we won't increment beyond limit.
         const userId = order.user;
 
         // total usage
         const totalOk =
-          coupon.usageLimitTotal === 0 || coupon.usedCount < coupon.usageLimitTotal;
+          coupon.usageLimitTotal === 0 ||
+          coupon.usedCount < coupon.usageLimitTotal;
 
         // per user usage
-        const idx = coupon.usedBy.findIndex((u) => String(u.user) === String(userId));
+        const idx = coupon.usedBy.findIndex(
+          (u) => String(u.user) === String(userId)
+        );
         const currentUserCount = idx >= 0 ? coupon.usedBy[idx].count : 0;
-        const perUserOk = currentUserCount < (coupon.usageLimitPerUser || 1);
+        const perUserOk =
+          currentUserCount < (coupon.usageLimitPerUser || 1);
 
         if (totalOk && perUserOk) {
           coupon.usedCount += 1;
+
           if (idx >= 0) coupon.usedBy[idx].count += 1;
           else coupon.usedBy.push({ user: userId, count: 1 });
+
+          // ✅ optional: auto-disable when total usage limit reached
+          if (
+            coupon.usageLimitTotal > 0 &&
+            coupon.usedCount >= coupon.usageLimitTotal
+          ) {
+            coupon.isActive = false;
+          }
 
           await coupon.save();
         }
@@ -334,7 +373,9 @@ router.post("/verify", async (req, res) => {
     return res.json({ message: "Payment verified successfully", order });
   } catch (err) {
     console.error("❌ VERIFY ERROR:", err);
-    return res.status(500).json({ message: err?.message || "Verification failed" });
+    return res
+      .status(500)
+      .json({ message: err?.message || "Verification failed" });
   }
 });
 
