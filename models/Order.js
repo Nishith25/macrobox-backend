@@ -1,3 +1,4 @@
+// backend/models/Order.js (BACKEND)
 const mongoose = require("mongoose");
 
 const orderSchema = new mongoose.Schema(
@@ -26,6 +27,9 @@ const orderSchema = new mongoose.Schema(
     coupon: {
       code: String,
       discount: Number,
+
+      // ✅ needed for your checkout.js (redeem only once after payment)
+      redeemed: { type: Boolean, default: false },
     },
 
     delivery: {
@@ -37,10 +41,17 @@ const orderSchema = new mongoose.Schema(
         city: String,
         state: String,
         pincode: String,
+
+        // ✅ NEW: Google Maps location support
+        locationMode: { type: String, enum: ["manual", "current"], default: "manual" },
+        locationText: { type: String, default: "" }, // manual text/link
+        lat: { type: Number, default: null },
+        lng: { type: Number, default: null },
+        mapsUrl: { type: String, default: "" }, // auto url for current
       },
       slot: {
         date: String, // "YYYY-MM-DD"
-        time: String, // "7:00 AM - 9:00 AM"
+        time: String, // backend expects "HH:00"
       },
     },
 

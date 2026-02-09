@@ -56,9 +56,7 @@ const parseSlotDateTime = (dateISO, timeHHmm) => {
 };
 
 const isSlotAtLeastHoursFromNow = (slotDateTime, hours) => {
-  if (!(slotDateTime instanceof Date) || isNaN(slotDateTime.getTime()))
-    return false;
-
+  if (!(slotDateTime instanceof Date) || isNaN(slotDateTime.getTime())) return false;
   const minTime = Date.now() + hours * 60 * 60 * 1000;
   return slotDateTime.getTime() >= minTime;
 };
@@ -131,10 +129,7 @@ const validateCouponForUser = (coupon, userId, subtotal) => {
 const computeTotals = (items) => {
   const subtotal = items.reduce((s, i) => s + i.price * i.qty, 0);
   const totalProtein = items.reduce((s, i) => s + (i.protein || 0) * i.qty, 0);
-  const totalCalories = items.reduce(
-    (s, i) => s + (i.calories || 0) * i.qty,
-    0
-  );
+  const totalCalories = items.reduce((s, i) => s + (i.calories || 0) * i.qty, 0);
 
   return {
     subtotal: Math.round(subtotal),
@@ -170,6 +165,22 @@ router.post("/create-order", verifyAuth, async (req, res) => {
       return res.status(400).json({ message: "Address is incomplete" });
     }
 
+    // ✅ NEW: require google maps location
+    const mode = address?.locationMode || "manual";
+    if (mode === "current") {
+      if (
+        typeof address.lat !== "number" ||
+        typeof address.lng !== "number" ||
+        !String(address.mapsUrl || "").trim()
+      ) {
+        return res.status(400).json({ message: "Please provide current location." });
+      }
+    } else {
+      if (!String(address.locationText || "").trim()) {
+        return res.status(400).json({ message: "Please provide Google Maps location." });
+      }
+    }
+
     if (!deliverySlot?.date || !deliverySlot?.time) {
       return res.status(400).json({ message: "Delivery slot missing" });
     }
@@ -201,8 +212,7 @@ router.post("/create-order", verifyAuth, async (req, res) => {
       };
     });
 
-    const { subtotal, totalProtein, totalCalories } =
-      computeTotals(normalizedItems);
+    const { subtotal, totalProtein, totalCalories } = computeTotals(normalizedItems);
 
     // coupon (validate but DO NOT increment usage here)
     let coupon = null;
@@ -244,7 +254,7 @@ router.post("/create-order", verifyAuth, async (req, res) => {
           }
         : undefined,
       delivery: {
-        address,
+        address, // ✅ will include location fields too
         slot: deliverySlot,
       },
       payment: {
@@ -263,9 +273,7 @@ router.post("/create-order", verifyAuth, async (req, res) => {
     });
   } catch (err) {
     console.error("❌ CREATE ORDER ERROR:", err);
-    return res
-      .status(500)
-      .json({ message: err?.message || "Failed to create order" });
+    return res.status(500).json({ message: err?.message || "Failed to create order" });
   }
 });
 
@@ -276,22 +284,11 @@ router.post("/create-order", verifyAuth, async (req, res) => {
 ===================================================== */
 router.post("/verify", async (req, res) => {
   try {
-    const {
-      orderId,
-      razorpay_order_id,
-      razorpay_payment_id,
-      razorpay_signature,
-    } = req.body;
+    const { orderId, razorpay_order_id, razorpay_payment_id, razorpay_signature } =
+      req.body;
 
-    if (
-      !orderId ||
-      !razorpay_order_id ||
-      !razorpay_payment_id ||
-      !razorpay_signature
-    ) {
-      return res
-        .status(400)
-        .json({ message: "Missing payment verification fields" });
+    if (!orderId || !razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+      return res.status(400).json({ message: "Missing payment verification fields" });
     }
 
     const order = await Order.findById(orderId);
@@ -334,18 +331,12 @@ router.post("/verify", async (req, res) => {
       if (coupon) {
         const userId = order.user;
 
-        // total usage
         const totalOk =
-          coupon.usageLimitTotal === 0 ||
-          coupon.usedCount < coupon.usageLimitTotal;
+          coupon.usageLimitTotal === 0 || coupon.usedCount < coupon.usageLimitTotal;
 
-        // per user usage
-        const idx = coupon.usedBy.findIndex(
-          (u) => String(u.user) === String(userId)
-        );
+        const idx = coupon.usedBy.findIndex((u) => String(u.user) === String(userId));
         const currentUserCount = idx >= 0 ? coupon.usedBy[idx].count : 0;
-        const perUserOk =
-          currentUserCount < (coupon.usageLimitPerUser || 1);
+        const perUserOk = currentUserCount < (coupon.usageLimitPerUser || 1);
 
         if (totalOk && perUserOk) {
           coupon.usedCount += 1;
@@ -353,11 +344,7 @@ router.post("/verify", async (req, res) => {
           if (idx >= 0) coupon.usedBy[idx].count += 1;
           else coupon.usedBy.push({ user: userId, count: 1 });
 
-          // ✅ optional: auto-disable when total usage limit reached
-          if (
-            coupon.usageLimitTotal > 0 &&
-            coupon.usedCount >= coupon.usageLimitTotal
-          ) {
+          if (coupon.usageLimitTotal > 0 && coupon.usedCount >= coupon.usageLimitTotal) {
             coupon.isActive = false;
           }
 
@@ -365,7 +352,7 @@ router.post("/verify", async (req, res) => {
         }
       }
 
-      order.coupon.redeemed = true; // ✅ prevent double increment
+      order.coupon.redeemed = true;
     }
 
     await order.save();
@@ -373,9 +360,7 @@ router.post("/verify", async (req, res) => {
     return res.json({ message: "Payment verified successfully", order });
   } catch (err) {
     console.error("❌ VERIFY ERROR:", err);
-    return res
-      .status(500)
-      .json({ message: err?.message || "Verification failed" });
+    return res.status(500).json({ message: err?.message || "Verification failed" });
   }
 });
 

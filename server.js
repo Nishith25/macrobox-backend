@@ -8,15 +8,17 @@ const cookieParser = require("cookie-parser");
 const app = express();
 
 /* ================= MIDDLEWARE FIRST ================= */
-app.use(cors({
-  origin: [
-    "http://localhost:5173",
-    "https://macrobox.co.in",
-    "https://www.macrobox.co.in",
-    "https://macrobox-frontend.vercel.app",
-  ],
-  credentials: true,
-}));
+app.use(
+  cors({
+    origin: [
+      "http://localhost:5173",
+      "https://macrobox.co.in",
+      "https://www.macrobox.co.in",
+      "https://macrobox-frontend.vercel.app",
+    ],
+    credentials: true,
+  })
+);
 
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
@@ -29,8 +31,12 @@ app.use("/api/meals", require("./routes/meals"));
 app.use("/api/admin/meals", require("./routes/adminMeals"));
 app.use("/api/admin/users", require("./routes/adminUsers"));
 
+/* ✅ ADMIN coupons */
 app.use("/api/admin/coupons", require("./routes/adminCoupons"));
+
+/* ✅ USER coupons (apply + available) */
 app.use("/api/coupons", require("./routes/coupons"));
+
 app.use("/api/checkout", require("./routes/checkout"));
 app.use("/api/orders", require("./routes/orders"));
 
