@@ -1,3 +1,4 @@
+// macrobox-backend/routes/meals.js (BACKEND)
 const express = require("express");
 const Meal = require("../models/Meal");
 
@@ -13,30 +14,62 @@ const router = express.Router();
 router.get("/featured", async (req, res) => {
   try {
     const meals = await Meal.find({ isFeatured: true })
-      .sort({ featuredOrder: 1 }) 
-      
-    res.json(meals);
+      .sort({ featuredOrder: 1 })
+      .lean();
+
+    return res.json(meals);
   } catch (err) {
-    res.status(500).json({ message: "Failed to fetch featured meals" });
+    console.error("Failed to fetch featured meals:", err);
+    return res.status(500).json({ message: "Failed to fetch featured meals" });
   }
 });
 
-
-
 /**
  * ======================================
- * GET ALL MEALS (PUBLIC)
+ * GET MEALS (PUBLIC)
  * GET /api/meals
- * Used by Meals page
+ *
+ * ✅ Default: returns ONLY NON-FEATURED meals (Meals page)
+ *
+ * Optional query params:
+ * - /api/meals?featured=true  -> only featured
+ * - /api/meals?featured=false -> only non-featured
+ * - /api/meals?all=true       -> all meals (featured + non-featured)
  * ======================================
  */
 router.get("/", async (req, res) => {
   try {
-    const meals = await Meal.find().sort({ createdAt: -1 });
-    res.status(200).json(meals);
+    const featured = req.query.featured;
+    const all = req.query.all;
+
+    const allBool = String(all).toLowerCase() === "true";
+
+    // ✅ if explicitly asked for all, return everything
+    if (allBool) {
+      const meals = await Meal.find().sort({ createdAt: -1 }).lean();
+      return res.status(200).json(meals);
+    }
+
+    // ✅ if featured query exists, respect it
+    if (featured !== undefined) {
+      const wantFeatured = String(featured).toLowerCase() === "true";
+
+      const meals = await Meal.find({ isFeatured: wantFeatured })
+        .sort(wantFeatured ? { featuredOrder: 1 } : { createdAt: -1 })
+        .lean();
+
+      return res.status(200).json(meals);
+    }
+
+    // ✅ default: NON-featured only
+    const meals = await Meal.find({ isFeatured: false })
+      .sort({ createdAt: -1 })
+      .lean();
+
+    return res.status(200).json(meals);
   } catch (err) {
     console.error("Get meals error:", err);
-    res.status(500).json({ message: "Failed to fetch meals" });
+    return res.status(500).json({ message: "Failed to fetch meals" });
   }
 });
 
@@ -49,16 +82,16 @@ router.get("/", async (req, res) => {
  */
 router.get("/:id", async (req, res) => {
   try {
-    const meal = await Meal.findById(req.params.id);
+    const meal = await Meal.findById(req.params.id).lean();
 
     if (!meal) {
       return res.status(404).json({ message: "Meal not found" });
     }
 
-    res.status(200).json(meal);
+    return res.status(200).json(meal);
   } catch (err) {
     console.error("Get meal by ID error:", err);
-    res.status(400).json({ message: "Invalid meal ID" });
+    return res.status(400).json({ message: "Invalid meal ID" });
   }
 });
 

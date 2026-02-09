@@ -1,3 +1,4 @@
+// macrobox-backend/routes/adminMeals.js (BACKEND)
 const express = require("express");
 const Meal = require("../models/Meal");
 const upload = require("../middleware/upload");
@@ -13,10 +14,40 @@ const router = express.Router();
 router.get("/", async (req, res) => {
   try {
     const meals = await Meal.find().sort({ createdAt: -1 });
-    res.status(200).json(meals);
+    return res.status(200).json(meals);
   } catch (err) {
     console.error("❌ Admin get meals error:", err);
-    res.status(500).json({ message: "Failed to fetch meals" });
+    return res.status(500).json({ message: "Failed to fetch meals" });
+  }
+});
+
+/**
+ * ======================================
+ * REORDER FEATURED MEALS (ADMIN)
+ * PATCH /api/admin/meals/reorder
+ * Body: { orderedIds: ["id1","id2",...] }
+ * ======================================
+ * ✅ Must be ABOVE "/:id" routes to avoid conflict
+ */
+router.patch("/reorder", async (req, res) => {
+  try {
+    const { orderedIds } = req.body;
+
+    if (!Array.isArray(orderedIds) || orderedIds.length === 0) {
+      return res.status(400).json({ message: "Invalid order data" });
+    }
+
+    // update featuredOrder based on new order
+    await Promise.all(
+      orderedIds.map((id, index) =>
+        Meal.findByIdAndUpdate(id, { featuredOrder: index })
+      )
+    );
+
+    return res.json({ message: "Featured meals reordered" });
+  } catch (err) {
+    console.error("❌ Reorder failed:", err);
+    return res.status(500).json({ message: "Reorder failed" });
   }
 });
 
@@ -28,31 +59,77 @@ router.get("/", async (req, res) => {
  */
 router.post("/", upload.single("image"), async (req, res) => {
   try {
-    console.log("REQ BODY:", req.body);
-    console.log("REQ FILE:", req.file);
-
     const { title, protein, calories, price, isFeatured } = req.body;
+
+    if (!title || protein === undefined || calories === undefined || price === undefined) {
+      return res.status(400).json({ message: "Missing required fields" });
+    }
 
     if (!req.file) {
       return res.status(400).json({ message: "Image is required" });
     }
 
+    // if featured, put it at end of featured list
+    let featuredOrder = 0;
+    const wantFeatured = isFeatured === "true" || isFeatured === true;
+
+    if (wantFeatured) {
+      const last = await Meal.findOne({ isFeatured: true }).sort({ featuredOrder: -1 });
+      featuredOrder = last ? (last.featuredOrder || 0) + 1 : 0;
+    }
+
     const meal = await Meal.create({
-      title,
+      title: String(title).trim(),
       protein: Number(protein),
       calories: Number(calories),
       price: Number(price),
       imageUrl: req.file.path,
-      isFeatured: isFeatured === "true",
+      isFeatured: wantFeatured,
+      featuredOrder,
     });
 
-    res.status(201).json(meal);
+    return res.status(201).json(meal);
   } catch (err) {
-    console.error("CREATE MEAL ERROR FULL:", err);
-    res.status(500).json({ message: err.message });
+    console.error("❌ CREATE MEAL ERROR FULL:", err);
+    return res.status(500).json({ message: err?.message || "Failed to create meal" });
   }
 });
 
+/**
+ * ======================================
+ * TOGGLE FEATURED (ADMIN)
+ * PATCH /api/admin/meals/:id/featured
+ * body: { isFeatured: true/false }
+ * ======================================
+ */
+router.patch("/:id/featured", async (req, res) => {
+  try {
+    const { isFeatured } = req.body;
+
+    if (typeof isFeatured === "undefined") {
+      return res.status(400).json({ message: "isFeatured value is required" });
+    }
+
+    const wantFeatured = isFeatured === true || isFeatured === "true";
+
+    // if turning ON featured, push to end of featured list
+    let update = { isFeatured: wantFeatured };
+
+    if (wantFeatured) {
+      const last = await Meal.findOne({ isFeatured: true }).sort({ featuredOrder: -1 });
+      update.featuredOrder = last ? (last.featuredOrder || 0) + 1 : 0;
+    }
+
+    const meal = await Meal.findByIdAndUpdate(req.params.id, update, { new: true });
+
+    if (!meal) return res.status(404).json({ message: "Meal not found" });
+
+    return res.status(200).json(meal);
+  } catch (err) {
+    console.error("❌ Toggle featured error:", err);
+    return res.status(500).json({ message: "Could not update featured status" });
+  }
+});
 
 /**
  * ======================================
@@ -63,119 +140,25 @@ router.post("/", upload.single("image"), async (req, res) => {
 router.put("/:id", upload.single("image"), async (req, res) => {
   try {
     const meal = await Meal.findById(req.params.id);
-    if (!meal) {
-      return res.status(404).json({ message: "Meal not found" });
-    }
+    if (!meal) return res.status(404).json({ message: "Meal not found" });
 
-    if (req.body.title !== undefined) meal.title = req.body.title;
+    if (req.body.title !== undefined) meal.title = String(req.body.title).trim();
     if (req.body.protein !== undefined) meal.protein = Number(req.body.protein);
-    if (req.body.calories !== undefined)
-      meal.calories = Number(req.body.calories);
+    if (req.body.calories !== undefined) meal.calories = Number(req.body.calories);
     if (req.body.price !== undefined) meal.price = Number(req.body.price);
 
-    if (req.body.isFeatured !== undefined) {
-      meal.isFeatured = req.body.isFeatured === "true";
-    }
+    // IMPORTANT: do not toggle featured here; use /:id/featured route
+    // (keeps ordering logic consistent)
 
     if (req.file) {
       meal.imageUrl = req.file.path;
     }
 
     await meal.save();
-    res.status(200).json(meal);
+    return res.status(200).json(meal);
   } catch (err) {
     console.error("❌ Update meal error:", err);
-    res.status(500).json({ message: "Failed to update meal" });
-  }
-});
-
-/**
- * REORDER FEATURED MEALS
- * PATCH /api/admin/meals/reorder
- */
-router.patch("/reorder", async (req, res) => {
-  try {
-    const { orderedIds } = req.body;
-
-    if (!Array.isArray(orderedIds)) {
-      return res.status(400).json({ message: "Invalid order data" });
-    }
-
-    await Promise.all(
-      orderedIds.map((id, index) =>
-        Meal.findByIdAndUpdate(id, { featuredOrder: index })
-      )
-    );
-
-    res.json({ message: "Featured meals reordered" });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: "Reorder failed" });
-  }
-});
-
-
-
-/**
- * ======================================
- * SAVE FEATURED ORDER (ADMIN)
- * PATCH /api/admin/meals/featured-order
- * ======================================
- */
-router.patch("/featured-order", async (req, res) => {
-  try {
-    const { orderedIds } = req.body;
-
-    if (!Array.isArray(orderedIds)) {
-      return res.status(400).json({ message: "Invalid payload" });
-    }
-
-    const updates = orderedIds.map((id, index) => ({
-      updateOne: {
-        filter: { _id: id },
-        update: { featuredOrder: index },
-      },
-    }));
-
-    await Meal.bulkWrite(updates);
-
-    res.json({ message: "Featured order updated" });
-  } catch (err) {
-    console.error("Save order error:", err);
-    res.status(500).json({ message: "Failed to save order" });
-  }
-});
-
-/**
- * ======================================
- * TOGGLE FEATURED (ADMIN)
- * PATCH /api/admin/meals/:id/featured
- * ======================================
- */
-router.patch("/:id/featured", async (req, res) => {
-  try {
-    const { isFeatured } = req.body;
-
-    if (typeof isFeatured === "undefined") {
-      return res
-        .status(400)
-        .json({ message: "isFeatured value is required" });
-    }
-
-    const meal = await Meal.findByIdAndUpdate(
-      req.params.id,
-      { isFeatured: isFeatured === true || isFeatured === "true" },
-      { new: true }
-    );
-
-    if (!meal) {
-      return res.status(404).json({ message: "Meal not found" });
-    }
-
-    res.status(200).json(meal);
-  } catch (err) {
-    console.error("❌ Toggle featured error:", err);
-    res.status(500).json({ message: "Could not update featured status" });
+    return res.status(500).json({ message: "Failed to update meal" });
   }
 });
 
@@ -188,15 +171,12 @@ router.patch("/:id/featured", async (req, res) => {
 router.delete("/:id", async (req, res) => {
   try {
     const meal = await Meal.findByIdAndDelete(req.params.id);
+    if (!meal) return res.status(404).json({ message: "Meal not found" });
 
-    if (!meal) {
-      return res.status(404).json({ message: "Meal not found" });
-    }
-
-    res.status(200).json({ message: "Meal deleted" });
+    return res.status(200).json({ message: "Meal deleted" });
   } catch (err) {
     console.error("❌ Delete meal error:", err);
-    res.status(500).json({ message: "Failed to delete meal" });
+    return res.status(500).json({ message: "Failed to delete meal" });
   }
 });
 

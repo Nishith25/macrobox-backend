@@ -1,3 +1,4 @@
+// macrobox-backend/models/Meal.js (BACKEND)
 const mongoose = require("mongoose");
 
 const mealSchema = new mongoose.Schema(
@@ -7,8 +8,9 @@ const mealSchema = new mongoose.Schema(
     calories: { type: Number, required: true },
     price: { type: Number, required: true },
     imageUrl: { type: String, required: true },
+
     isFeatured: { type: Boolean, default: false },
-    featuredOrder: { type: Number, default: 0,},
+    featuredOrder: { type: Number, default: 0 },
   },
   { timestamps: true }
 );
