@@ -1,5 +1,5 @@
 // backend/routes/checkout.js
-// (BACKEND) MacroBox Checkout Routes - Updated for Single Time Slots + 3-hour rule + Razorpay verify hardening
+// (BACKEND) MacroBox Checkout Routes - Single Time Slots + Slot Availability + Razorpay verify hardening
 
 const express = require("express");
 const Razorpay = require("razorpay");
@@ -22,10 +22,11 @@ const razorpay =
 /* ================= SLOT RULES =================
    - Allowed slots: 07:00 to 19:00 (hourly)
    - Customer can order only if selected slot is at least 3 hours from now
+   - IMPORTANT: Do NOT show "3 hours" in error messages (just "Time slot is not available")
 ================================================ */
-const SLOT_START_HOUR = 7; // 7 AM
-const SLOT_END_HOUR = 19; // 7 PM
-const MIN_HOURS_BEFORE_SLOT = 3;
+const SLOT_START_HOUR = Number(process.env.DELIVERY_START_HOUR || 7);
+const SLOT_END_HOUR = Number(process.env.DELIVERY_END_HOUR || 19);
+const MIN_HOURS_BEFORE_SLOT = Number(process.env.DELIVERY_MIN_LEAD_HOURS || 3);
 
 const pad2 = (n) => String(n).padStart(2, "0");
 
@@ -36,8 +37,10 @@ const isValidSlotTime = (hhmm) => {
   if (typeof hhmm !== "string") return false;
   const match = hhmm.match(/^(\d{2}):00$/);
   if (!match) return false;
+
   const hour = Number(match[1]);
   if (Number.isNaN(hour)) return false;
+
   return hour >= SLOT_START_HOUR && hour <= SLOT_END_HOUR;
 };
 
@@ -64,6 +67,7 @@ const parseSlotDateTime = (dateISO, timeHHmm) => {
 const isSlotAtLeastHoursFromNow = (slotDateTime, hours) => {
   if (!(slotDateTime instanceof Date) || isNaN(slotDateTime.getTime()))
     return false;
+
   const minTime = Date.now() + hours * 60 * 60 * 1000;
   return slotDateTime.getTime() >= minTime;
 };
@@ -141,21 +145,19 @@ router.post("/create-order", verifyAuth, async (req, res) => {
     // ✅ Slot format + range check (07:00 - 19:00)
     if (!isValidSlotTime(deliverySlot.time)) {
       return res.status(400).json({
-        message: `Invalid delivery time. Allowed: ${pad2(
-          SLOT_START_HOUR
-        )}:00 to ${pad2(SLOT_END_HOUR)}:00`,
+        message: "Time slot is not available",
       });
     }
 
-    // ✅ Slot date+time -> Date, enforce 3-hour rule
+    // ✅ Slot date+time -> Date, enforce lead-time rule
     const slotDateTime = parseSlotDateTime(deliverySlot.date, deliverySlot.time);
     if (!slotDateTime) {
-      return res.status(400).json({ message: "Invalid delivery slot format" });
+      return res.status(400).json({ message: "Time slot is not available" });
     }
 
     if (!isSlotAtLeastHoursFromNow(slotDateTime, MIN_HOURS_BEFORE_SLOT)) {
       return res.status(400).json({
-        message: `You can order only ${MIN_HOURS_BEFORE_SLOT} hours before the selected delivery time.`,
+        message: "Time slot is not available",
       });
     }
 
@@ -240,7 +242,7 @@ router.post("/create-order", verifyAuth, async (req, res) => {
 /* =====================================================
    VERIFY PAYMENT
    POST /api/checkout/verify
-   ✅ Removed verifyAuth to avoid failure if token expires after payment
+   ✅ Removed verifyAuth so it doesn't fail if token expires after payment
    ✅ Checks razorpayOrderId matches DB order
 ===================================================== */
 router.post("/verify", async (req, res) => {
