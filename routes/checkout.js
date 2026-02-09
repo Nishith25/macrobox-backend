@@ -1,4 +1,6 @@
 // backend/routes/checkout.js
+// (BACKEND) MacroBox Checkout Routes - Updated for Single Time Slots + 3-hour rule + Razorpay verify hardening
+
 const express = require("express");
 const Razorpay = require("razorpay");
 const crypto = require("crypto");
@@ -16,6 +18,55 @@ const razorpay =
         key_secret: process.env.RAZORPAY_KEY_SECRET,
       })
     : null;
+
+/* ================= SLOT RULES =================
+   - Allowed slots: 07:00 to 19:00 (hourly)
+   - Customer can order only if selected slot is at least 3 hours from now
+================================================ */
+const SLOT_START_HOUR = 7; // 7 AM
+const SLOT_END_HOUR = 19; // 7 PM
+const MIN_HOURS_BEFORE_SLOT = 3;
+
+const pad2 = (n) => String(n).padStart(2, "0");
+
+// Expecting frontend to send:
+// deliverySlot.date = "YYYY-MM-DD"
+// deliverySlot.time = "HH:00" (24h)
+const isValidSlotTime = (hhmm) => {
+  if (typeof hhmm !== "string") return false;
+  const match = hhmm.match(/^(\d{2}):00$/);
+  if (!match) return false;
+  const hour = Number(match[1]);
+  if (Number.isNaN(hour)) return false;
+  return hour >= SLOT_START_HOUR && hour <= SLOT_END_HOUR;
+};
+
+const parseSlotDateTime = (dateISO, timeHHmm) => {
+  if (typeof dateISO !== "string" || typeof timeHHmm !== "string") return null;
+
+  const dm = dateISO.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!dm) return null;
+
+  const tm = timeHHmm.match(/^(\d{2}):00$/);
+  if (!tm) return null;
+
+  const year = Number(dm[1]);
+  const month = Number(dm[2]); // 1-12
+  const day = Number(dm[3]);
+  const hour = Number(tm[1]);
+
+  if ([year, month, day, hour].some((x) => Number.isNaN(x))) return null;
+
+  // local timezone date object
+  return new Date(year, month - 1, day, hour, 0, 0, 0);
+};
+
+const isSlotAtLeastHoursFromNow = (slotDateTime, hours) => {
+  if (!(slotDateTime instanceof Date) || isNaN(slotDateTime.getTime()))
+    return false;
+  const minTime = Date.now() + hours * 60 * 60 * 1000;
+  return slotDateTime.getTime() >= minTime;
+};
 
 /* ================= HELPERS ================= */
 
@@ -57,7 +108,8 @@ const applyCoupon = (subtotal, coupon) => {
 /* =====================================================
    CREATE ORDER
    POST /api/checkout/create-order
-   ✅ Requires login (because we need user id)
+   ✅ Requires login (user id needed)
+   ✅ Enforces slot rules on backend too
 ===================================================== */
 router.post("/create-order", verifyAuth, async (req, res) => {
   try {
@@ -86,7 +138,28 @@ router.post("/create-order", verifyAuth, async (req, res) => {
       return res.status(400).json({ message: "Delivery slot missing" });
     }
 
-    // ✅ Normalize items (match schema)
+    // ✅ Slot format + range check (07:00 - 19:00)
+    if (!isValidSlotTime(deliverySlot.time)) {
+      return res.status(400).json({
+        message: `Invalid delivery time. Allowed: ${pad2(
+          SLOT_START_HOUR
+        )}:00 to ${pad2(SLOT_END_HOUR)}:00`,
+      });
+    }
+
+    // ✅ Slot date+time -> Date, enforce 3-hour rule
+    const slotDateTime = parseSlotDateTime(deliverySlot.date, deliverySlot.time);
+    if (!slotDateTime) {
+      return res.status(400).json({ message: "Invalid delivery slot format" });
+    }
+
+    if (!isSlotAtLeastHoursFromNow(slotDateTime, MIN_HOURS_BEFORE_SLOT)) {
+      return res.status(400).json({
+        message: `You can order only ${MIN_HOURS_BEFORE_SLOT} hours before the selected delivery time.`,
+      });
+    }
+
+    // ✅ Normalize items (match Order schema)
     const normalizedItems = items.map((i) => {
       if (!i.mealId) throw new Error("Meal ID missing in cart item");
       if (!i.qty || i.qty < 1) throw new Error("Invalid quantity");
@@ -107,7 +180,7 @@ router.post("/create-order", verifyAuth, async (req, res) => {
     let coupon = null;
     if (couponCode) {
       coupon = await Coupon.findOne({
-        code: couponCode.toUpperCase(),
+        code: String(couponCode).toUpperCase(),
         isActive: true,
       });
     }
@@ -140,7 +213,7 @@ router.post("/create-order", verifyAuth, async (req, res) => {
         : undefined,
       delivery: {
         address,
-        slot: deliverySlot,
+        slot: deliverySlot, // { date: "YYYY-MM-DD", time: "HH:00" }
       },
       payment: {
         provider: "razorpay",
@@ -167,9 +240,8 @@ router.post("/create-order", verifyAuth, async (req, res) => {
 /* =====================================================
    VERIFY PAYMENT
    POST /api/checkout/verify
-   ✅ IMPORTANT FIX:
-   - Removed verifyAuth so payment confirmation doesn't fail on expired token
-   - Confirms orderId belongs to razorpayOrderId stored in DB
+   ✅ Removed verifyAuth to avoid failure if token expires after payment
+   ✅ Checks razorpayOrderId matches DB order
 ===================================================== */
 router.post("/verify", async (req, res) => {
   try {
@@ -180,8 +252,15 @@ router.post("/verify", async (req, res) => {
       razorpay_signature,
     } = req.body;
 
-    if (!orderId || !razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
-      return res.status(400).json({ message: "Missing payment verification fields" });
+    if (
+      !orderId ||
+      !razorpay_order_id ||
+      !razorpay_payment_id ||
+      !razorpay_signature
+    ) {
+      return res
+        .status(400)
+        .json({ message: "Missing payment verification fields" });
     }
 
     const order = await Order.findById(orderId);
