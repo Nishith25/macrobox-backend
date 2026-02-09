@@ -1,8 +1,43 @@
+// backend/routes/coupons.js (BACKEND)
 const express = require("express");
 const Coupon = require("../models/Coupon");
 const { verifyAuth, verifyAdmin } = require("../middleware/auth");
 
 const router = express.Router();
+
+/* ===================== HELPERS ===================== */
+
+// Make "validTo" inclusive for the whole day (23:59:59.999)
+const endOfDay = (d) => {
+  const x = new Date(d);
+  x.setHours(23, 59, 59, 999);
+  return x;
+};
+
+const resolveValidity = (coupon) => {
+  // Prefer validFrom/validTo, fallback to expiresAt
+  const from = coupon.validFrom ? new Date(coupon.validFrom) : null;
+
+  let to = null;
+  if (coupon.validTo) to = endOfDay(coupon.validTo);
+  else if (coupon.expiresAt) to = new Date(coupon.expiresAt);
+
+  return { from, to };
+};
+
+const computeDiscount = (subtotal, coupon) => {
+  let discount = 0;
+
+  if (coupon.type === "flat") {
+    discount = Number(coupon.value || 0);
+  } else {
+    discount = Math.round((subtotal * Number(coupon.value || 0)) / 100);
+    if (coupon.maxDiscount > 0) discount = Math.min(discount, coupon.maxDiscount);
+  }
+
+  discount = Math.min(discount, subtotal);
+  return discount;
+};
 
 /* =========================
    APPLY COUPON (USER)
@@ -14,16 +49,29 @@ router.post("/apply", verifyAuth, async (req, res) => {
 
     if (!code) return res.status(400).json({ message: "Coupon code required" });
 
-    const coupon = await Coupon.findOne({ code: String(code).toUpperCase().trim() });
-    if (!coupon || !coupon.isActive) return res.status(400).json({ message: "Invalid coupon" });
+    const coupon = await Coupon.findOne({
+      code: String(code).toUpperCase().trim(),
+    });
 
-    if (new Date(coupon.expiresAt).getTime() < Date.now()) {
+    if (!coupon || !coupon.isActive) {
+      return res.status(400).json({ message: "Invalid coupon" });
+    }
+
+    const now = new Date();
+    const { from, to } = resolveValidity(coupon);
+
+    if (from && now < from) {
+      return res.status(400).json({ message: "Coupon not active yet" });
+    }
+    if (to && now > to) {
       return res.status(400).json({ message: "Coupon expired" });
     }
 
     const subtotal = Number(cartTotal || 0);
     if (subtotal < coupon.minCartTotal) {
-      return res.status(400).json({ message: `Minimum cart total ₹${coupon.minCartTotal}` });
+      return res
+        .status(400)
+        .json({ message: `Minimum cart total ₹${coupon.minCartTotal}` });
     }
 
     // total usage
@@ -32,24 +80,17 @@ router.post("/apply", verifyAuth, async (req, res) => {
     }
 
     // per user usage
-    const usedBy = coupon.usedBy.find((u) => u.user.toString() === req.user._id.toString());
+    const usedBy = coupon.usedBy.find(
+      (u) => u.user.toString() === req.user._id.toString()
+    );
     const usedTimes = usedBy?.count || 0;
     if (usedTimes >= coupon.usageLimitPerUser) {
       return res.status(400).json({ message: "You already used this coupon" });
     }
 
-    let discount = 0;
+    const discount = computeDiscount(subtotal, coupon);
 
-    if (coupon.type === "flat") {
-      discount = coupon.value;
-    } else {
-      discount = Math.round((subtotal * coupon.value) / 100);
-      if (coupon.maxDiscount > 0) discount = Math.min(discount, coupon.maxDiscount);
-    }
-
-    discount = Math.min(discount, subtotal);
-
-    res.json({
+    return res.json({
       code: coupon.code,
       discount,
     });
@@ -65,9 +106,11 @@ router.post("/apply", verifyAuth, async (req, res) => {
 ========================= */
 router.post("/", verifyAuth, verifyAdmin, async (req, res) => {
   try {
-    const payload = req.body;
+    const payload = { ...req.body };
     payload.code = String(payload.code).toUpperCase().trim();
 
+    // ✅ ensure validTo is stored as date (UI sends YYYY-MM-DD)
+    // we keep it as Date; expiration inclusive is handled in resolveValidity()
     const created = await Coupon.create(payload);
     res.status(201).json(created);
   } catch (err) {

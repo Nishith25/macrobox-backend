@@ -1,8 +1,15 @@
+// backend/models/Coupon.js (BACKEND)
 const mongoose = require("mongoose");
 
 const couponSchema = new mongoose.Schema(
   {
-    code: { type: String, required: true, unique: true, uppercase: true, trim: true },
+    code: {
+      type: String,
+      required: true,
+      unique: true,
+      uppercase: true,
+      trim: true,
+    },
 
     type: { type: String, enum: ["flat", "percent"], required: true },
     value: { type: Number, required: true }, // flat ₹ or percent %
@@ -10,10 +17,16 @@ const couponSchema = new mongoose.Schema(
     minCartTotal: { type: Number, default: 0 },
     maxDiscount: { type: Number, default: 0 }, // only for percent (0 = no cap)
 
-    expiresAt: { type: Date, required: true },
+    // ✅ NEW: validity range
+    validFrom: { type: Date, default: null },
+    validTo: { type: Date, default: null },
+
+    // ✅ Backward compatibility (old field)
+    expiresAt: { type: Date, default: null },
 
     isActive: { type: Boolean, default: true },
 
+    // ✅ usage limits
     usageLimitTotal: { type: Number, default: 0 }, // 0 = unlimited
     usageLimitPerUser: { type: Number, default: 1 },
 
